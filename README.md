@@ -4,9 +4,10 @@ A React console that mirrors MIDI input from the Pioneer DDJ-FLX4.
 
 ## Run locally
 
-Use Node.js 18 or newer. From this directory, run:
+Use Node.js 18 or newer. From the repository root, run:
 
 ```sh
+cd frontend
 npm install
 npm run dev
 ```
