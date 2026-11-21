@@ -13,6 +13,12 @@ const DEFAULT_RECORDING_PATH = "/recordings/mix1.json";
 const MIX_MANIFEST_PATH = "/mixes/mix1/tracks.json";
 const MIX_TRACK_A = "/mixes/mix1/deck-a.mp3";
 const MIX_TRACK_B = "/mixes/mix1/deck-b.mp3";
+const MIX_HIT_MARKER = "mix.hit";
+const RIGHT_TRACK_ENTRY_MS = 22933;
+const RIGHT_TRACK_COUNTDOWN_MS = 3000;
+const RIGHT_TRACK_GO_WINDOW_MS = 1200;
+const MIX_HIT_LEAD_MS = 700;
+const MIX_HIT_WINDOW_MS = 110;
 
 function savedRecordings() {
   try {
@@ -21,6 +27,27 @@ function savedRecordings() {
   } catch {
     return [];
   }
+}
+
+function hasMarker(event, marker = MIX_HIT_MARKER) {
+  return Array.isArray(event?.markers) && event.markers.includes(marker);
+}
+
+function markerCueState(events = [], time = 0) {
+  let upcoming = false;
+  let active = false;
+  for (const event of events) {
+    if (!hasMarker(event)) continue;
+    const distance = event.t - time;
+    if (distance >= 0 && distance <= MIX_HIT_LEAD_MS) upcoming = true;
+    if (Math.abs(distance) <= MIX_HIT_WINDOW_MS) active = true;
+    if (upcoming && active) break;
+  }
+  return { upcoming, active };
+}
+
+function markerCount(recording) {
+  return recording?.events?.filter(event => hasMarker(event)).length || 0;
 }
 
 function Meter({ label, value, targetValue, vertical = false }) {
@@ -48,7 +75,7 @@ function Knob({ label, value, targetValue, highlighted = false }) {
   </div>;
 }
 
-function Deck({ side, values, targetValues, cueControls = new Set() }) {
+function Deck({ side, values, targetValues, cueControls = new Set(), spinning = false, rightTrackCue }) {
   const read = control => values[side + "." + control];
   const readTarget = control => targetValues?.[side + "." + control];
   const transport = [["play", "PLAY"]];
@@ -62,7 +89,11 @@ function Deck({ side, values, targetValues, cueControls = new Set() }) {
     </div>
     <div className="deck-body">
       <div className={cueControls.has(side + ".jog") ? "platter highlighted" : "platter"} style={{ "--angle": (read("jog") ?? 0) + "deg", "--target-angle": (readTarget("jog") ?? read("jog") ?? 0) + "deg" }}>
-        <div className="disc"><div className="disc-label" /></div>
+        <div className={spinning ? "disc spinning" : "disc"}><div className="disc-label" /></div>
+        {side === "b" && rightTrackCue?.phase !== "idle" && rightTrackCue?.phase !== "done" && <div className={["platter-countdown", rightTrackCue.phase].join(" ")} aria-live="assertive">
+          <strong>{rightTrackCue.phase === "go" ? "SPIN RIGHT" : rightTrackCue.seconds}</strong>
+          <small>{rightTrackCue.phase === "go" ? "Deck B" : "Get ready"}</small>
+        </div>}
       </div>
     </div>
     <div className="transport">{transport.map(([control, label]) =>
@@ -99,6 +130,10 @@ function App() {
   const [hologramDelayMs, setHologramDelayMs] = useState(-4000);
   const [targetValues, setTargetValues] = useState({});
   const [cueControls, setCueControls] = useState(new Set());
+  const [mixHitCue, setMixHitCue] = useState({ upcoming: false, active: false });
+  const [trackStarted, setTrackStarted] = useState(false);
+  const [lastMixSignal, setLastMixSignal] = useState(null);
+  const [rightTrackCue, setRightTrackCue] = useState({ phase: "idle", seconds: null });
   const [isChallenging, setIsChallenging] = useState(false);
   const [scoreResult, setScoreResult] = useState(null);
   const live = useRef(frame);
@@ -109,6 +144,46 @@ function App() {
   const audioEngineRef = useRef(null);
   const startChallengeRef = useRef(null);
   const hologramDelayRef = useRef(0);
+  const trackStartedAtRef = useRef(null);
+
+  function noteTrackStart() {
+    if (trackStartedAtRef.current !== null) return;
+    trackStartedAtRef.current = performance.now();
+    setTrackStarted(true);
+    setLastMixSignal(null);
+  }
+
+  function resetTrackClock() {
+    trackStartedAtRef.current = null;
+    setTrackStarted(false);
+    setLastMixSignal(null);
+    setRightTrackCue({ phase: "idle", seconds: null });
+  }
+
+  useEffect(() => {
+    if (!trackStarted || trackStartedAtRef.current === null) {
+      setRightTrackCue({ phase: "idle", seconds: null });
+      return undefined;
+    }
+    let animation = null;
+    const update = () => {
+      const elapsed = performance.now() - trackStartedAtRef.current;
+      const remaining = RIGHT_TRACK_ENTRY_MS - elapsed;
+      const next = remaining > RIGHT_TRACK_COUNTDOWN_MS
+        ? { phase: "idle", seconds: null }
+        : remaining > 0
+          ? { phase: "countdown", seconds: Math.ceil(remaining / 1000) }
+          : remaining > -RIGHT_TRACK_GO_WINDOW_MS
+            ? { phase: "go", seconds: null }
+            : { phase: "done", seconds: null };
+      setRightTrackCue(current => current.phase === next.phase && current.seconds === next.seconds ? current : next);
+      if (remaining > -RIGHT_TRACK_GO_WINDOW_MS) animation = requestAnimationFrame(update);
+    };
+    update();
+    return () => {
+      if (animation !== null) cancelAnimationFrame(animation);
+    };
+  }, [trackStarted]);
 
   useEffect(() => {
     hologramDelayRef.current = hologramDelayMs;
@@ -199,11 +274,20 @@ function App() {
       for (const deck of ["a", "b"]) {
         const playKey = deck + ".play";
         if (Object.prototype.hasOwnProperty.call(changes, playKey)) {
+          if (eventValues[playKey]) noteTrackStart();
           audioEngineRef.current?.setPlaying(deck, Boolean(eventValues[playKey])).catch(() => {});
         }
       }
-      if (leftJogTrigger) audioEngineRef.current?.setPlaying("a", true).catch(() => {});
-      if (rightJogTrigger) audioEngineRef.current?.setPlaying("b", true).catch(() => {});
+      if (leftJogTrigger) {
+        noteTrackStart();
+        audioEngineRef.current?.setPlaying("a", true).catch(() => {});
+      }
+      if (rightJogTrigger) {
+        noteTrackStart();
+        audioEngineRef.current?.setPlaying("b", true).catch(() => {});
+      }
+      if ((changes["a.play"] === false || changes["b.play"] === false)
+        && !eventValues["a.play"] && !eventValues["b.play"]) resetTrackClock();
       if (!challengeRef.current && leftJogTrigger && startChallengeRef.current) {
         startChallengeRef.current("a", eventValues, bytes, performance.now());
         startedChallenge = true;
@@ -248,6 +332,7 @@ function App() {
     audioEngineRef.current?.stop();
     setTargetValues({});
     setCueControls(new Set());
+    setMixHitCue({ upcoming: false, active: false });
     setIsPlaying(false);
   }
 
@@ -260,6 +345,7 @@ function App() {
       events: [{ t: 0, values: { ...live.current.values }, data: [] }],
     };
     setIsRecording(true);
+    setMixHitCue({ upcoming: false, active: false });
   }
 
   function stopRecording() {
@@ -282,7 +368,26 @@ function App() {
     setLoadedRecording(recording);
     setTargetValues({});
     setCueControls(new Set());
+    setMixHitCue({ upcoming: false, active: false });
     localStorage.setItem(RECORDINGS_KEY, JSON.stringify(next));
+  }
+
+  function markMixHit() {
+    if (trackStartedAtRef.current === null) return;
+    const timestampMs = Math.max(0, performance.now() - trackStartedAtRef.current);
+    const signal = {
+      type: MIX_HIT_MARKER,
+      timestampMs: Math.round(timestampMs),
+      timestampSeconds: Number((timestampMs / 1000).toFixed(3)),
+      emittedAt: new Date().toISOString(),
+    };
+    window.dispatchEvent(new CustomEvent("deck-relay:mix-hit", { detail: signal }));
+    console.info("[Deck Relay] mix-hit", signal);
+    setLastMixSignal(signal);
+    setMixHitCue({ upcoming: false, active: true });
+    window.setTimeout(() => setMixHitCue(current => current.active
+      ? { upcoming: false, active: false }
+      : current), 220);
   }
 
   function loadRecording() {
@@ -293,6 +398,7 @@ function App() {
     setFrame({ values: {} });
     setTargetValues({});
     setCueControls(new Set());
+    setMixHitCue({ upcoming: false, active: false });
   }
 
   function saveRecordingToComputer() {
@@ -344,12 +450,15 @@ function App() {
       setFrame({ values: playback.values });
       setTargetValues(playback.values);
       setCueControls(upcomingContinuousControls(playback.recording.events, referenceTime));
+      setMixHitCue(markerCueState(playback.recording.events, referenceTime));
       if (elapsed >= playback.recording.durationMs) {
         playbackRef.current = null;
         targetPlaybackRef.current = null;
         audioEngineRef.current?.stop();
+        resetTrackClock();
         setTargetValues({});
         setCueControls(new Set());
+        setMixHitCue({ upcoming: false, active: false });
         setIsPlaying(false);
         return;
       }
@@ -369,8 +478,10 @@ function App() {
     if (targetPlaybackRef.current?.raf) cancelAnimationFrame(targetPlaybackRef.current.raf);
     targetPlaybackRef.current = null;
     audioEngineRef.current?.stop();
+    resetTrackClock();
     setTargetValues({});
     setCueControls(new Set());
+    setMixHitCue({ upcoming: false, active: false });
     setIsChallenging(false);
     setScoreResult(scoreRecording(loadedRecording, {
       durationMs,
@@ -417,6 +528,7 @@ function App() {
       targetPlayback.lastReferenceTime = referenceTime;
       setTargetValues(targetPlayback.values);
       setCueControls(upcomingContinuousControls(loadedRecording.events, referenceTime));
+      setMixHitCue(markerCueState(loadedRecording.events, referenceTime));
       if (elapsed >= loadedRecording.durationMs) {
         finishChallenge();
         return;
@@ -446,6 +558,7 @@ function App() {
   function disconnect() {
     audioEngineRef.current?.stop();
     audioEngineRef.current = null;
+    resetTrackClock();
     setAccess(null);
     setPorts([]);
     setSelected("");
@@ -470,6 +583,15 @@ function App() {
         <button className={isRecording ? "record-button recording" : "record-button"} onClick={isRecording ? stopRecording : startRecording} disabled={!isRecording && (!port || !connected || isPlaying || isChallenging)}>
           {isRecording ? "Stop recording" : "Record"}
         </button>
+        <button
+          className={["mix-hit-button", mixHitCue.upcoming ? "target-active" : "", mixHitCue.active ? "target-hit" : ""].filter(Boolean).join(" ")}
+          onClick={markMixHit}
+          disabled={!trackStarted || isPlaying}
+          title="Send a mix-hit signal with the timestamp since the track started"
+        >
+          Mix hit
+        </button>
+        {lastMixSignal && <span className="mix-signal-time">{lastMixSignal.timestampSeconds.toFixed(3)}s</span>}
         <select className="recording-select" aria-label="Saved recordings" value={selectedRecordingId} onChange={event => setSelectedRecordingId(event.target.value)} disabled={!recordings.length || isRecording}>
           <option value="">Select recording</option>
           {recordings.map(recording => <option key={recording.id} value={recording.id}>{recording.name}</option>)}
@@ -480,7 +602,7 @@ function App() {
           {isPlaying ? "Stop demo" : "Demo"}
         </button>
         {isChallenging && <button className="challenge-button" onClick={finishChallenge}>Finish challenge</button>}
-        {loadedRecording && <span className="loaded-recording">{loadedRecording.name}</span>}
+        {loadedRecording && <span className="loaded-recording">{loadedRecording.name}{markerCount(loadedRecording) ? " · " + markerCount(loadedRecording) + " mix hit" + (markerCount(loadedRecording) === 1 ? "" : "s") : ""}</span>}
       </div>
     </div>
     <div className="status"><span className={connected ? "online" : ""} /><span>{status}</span><strong className="challenge-status">{challengeStatus}</strong></div>
@@ -494,7 +616,7 @@ function App() {
       <span><b>B</b>{mixManifest.deckB.artist} — {mixManifest.deckB.title}</span>
     </div>}
     <div className="surface">
-      <Deck side="a" values={values} targetValues={targetValues} cueControls={cueControls} />
+      <Deck side="a" values={values} targetValues={targetValues} cueControls={cueControls} spinning={Boolean(values["a.play"])} />
       <section className="mixer" aria-label="Mixer">
         <div className="channels">
           {["a", "b"].map(side => <div className={"channel " + side} key={side}>
@@ -505,7 +627,7 @@ function App() {
           <Meter label="Crossfader" value={values["mixer.crossfade"]} targetValue={targetValues["mixer.crossfade"]} />
         </div>
       </section>
-      <Deck side="b" values={values} targetValues={targetValues} cueControls={cueControls} />
+      <Deck side="b" values={values} targetValues={targetValues} cueControls={cueControls} spinning={Boolean(values["b.play"])} rightTrackCue={rightTrackCue} />
     </div>
     {scoreResult && <ScoreCard result={scoreResult} />}
   </main>;

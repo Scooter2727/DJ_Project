@@ -18,6 +18,7 @@ const CONTROL_WEIGHTS = {
 const SAMPLE_INTERVAL_MS = 50;
 const ACTIVE_CHANGE_THRESHOLD = 128;
 const BUTTON_TIMING_WINDOW_MS = 250;
+const MARKER_CONTROLS = new Set(["mix.hit"]);
 
 const clamp = (value, minimum = 0, maximum = 1) => Math.min(maximum, Math.max(minimum, value));
 
@@ -75,6 +76,9 @@ function collectButtonChanges(events) {
       if (typeof value !== "boolean" || value === previous[control]) continue;
       changes.push({ t: event.t, control, pressed: value });
       previous[control] = value;
+    }
+    for (const marker of event.markers || []) {
+      if (MARKER_CONTROLS.has(marker)) changes.push({ t: event.t, control: marker, pressed: true });
     }
   }
   return changes;
