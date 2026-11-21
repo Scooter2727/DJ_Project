@@ -4,7 +4,7 @@ import { decodeMidi } from "./midi.js";
 import "./style.css";
 
 const percent = value => value === undefined ? "—" : Math.round(value / 16383 * 100) + "%";
-const pairs = [["trim", "Trim"], ["high", "High EQ"], ["mid", "Mid EQ"], ["low", "Low EQ"]];
+const pairs = [["trim", "Trim"], ["high", "High EQ"], ["mid", "Mid EQ"], ["low", "Low EQ"], ["cfx", "CFX"]];
 
 function Meter({ label, value, vertical = false }) {
   const position = value === undefined ? 50 : value / 16383 * 100;

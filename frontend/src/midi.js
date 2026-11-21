@@ -3,12 +3,22 @@ const deckKnobs = {
   0x0f: "low", 0x13: "volume"
 };
 const mixerKnobs = { 0x08: "master", 0x1f: "crossfade" };
+const cfxKnobs = { 0x17: "a.cfx", 0x18: "b.cfx" };
 
 export function decodeMidi([status, id, value], current) {
   const kind = status & 0xf0;
   const channel = status & 0x0f;
   const deck = channel === 0 ? "a" : "b";
   if (kind === 0xb0) {
+    if (channel === 6 && cfxKnobs[id]) {
+      return { [cfxKnobs[id]]: value * 129 };
+    }
+    if (channel === 6 && id === 0x37) {
+      return { "a.cfx": (current["a.cfx"] ?? 0) + value };
+    }
+    if (channel === 6 && id === 0x38) {
+      return { "b.cfx": (current["b.cfx"] ?? 0) + value };
+    }
     if (channel < 2 && id >= 0x21 && id <= 0x23) {
       const key = deck + ".jog";
       return { [key]: (current[key] ?? 0) + (value - 64) * 3 };
