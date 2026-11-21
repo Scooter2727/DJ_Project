@@ -25,6 +25,22 @@ body {
   min-height: 0;
 }
 
+.mainstage-camera-source {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.mainstage-hype-accessible {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
 .mainstage-controls {
   position: relative;
   z-index: 20;

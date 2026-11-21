@@ -73,6 +73,19 @@ export function createMixSession(chart, selection, bpm, { getAudio, liveValues, 
     }
     lastValues = values;
   }
+  function setDeckPlayback(deck, playing) {
+    if (!playing) {
+      pause(deck);
+      if (deck === master && selection === "mix1") {
+        if (mode === "demo") resumePreview = entryStarted;
+        else resumeSecond ||= !audio.players.b.paused || pending.has("b");
+        pause("b");
+      }
+    } else if (deck === master || !audio.players[master].paused) {
+      if (audio.players[deck].paused) play(deck);
+      if (deck === master && resumeSecond) { resumeSecond = false; play("b"); }
+    }
+  }
   const source = createMixSource(chart, bpm, transport, frame => {
     const { time, demo, playing } = frame;
     frame.audio = playing ? audio.audioFrame() : silence;
@@ -103,22 +116,17 @@ export function createMixSession(chart, selection, bpm, { getAudio, liveValues, 
     source, stop,
     attach(view) { screen = view; },
     preview() { if (mode === "demo" || mode === "live") stop(); else start(true); },
+    togglePlayback() {
+      if (mode === "ready" || mode === "finished") start(false);
+      else setDeckPlayback(master, audio.players[master].paused && !pending.has(master));
+    },
     input(deck, playing) {
       if (mode === "demo" || (selection !== "mix1" && deck !== master)) return;
       if (mode !== "live") {
         if (deck === master && playing) start(false);
         return;
       }
-      if (!playing) {
-        pause(deck);
-        if (deck === master && selection === "mix1") {
-          resumeSecond = !audio.players.b.paused;
-          pause("b");
-        }
-      } else if (deck === master || !audio.players[master].paused) {
-        if (audio.players[deck].paused) play(deck);
-        if (deck === master && resumeSecond) { resumeSecond = false; play("b"); }
-      }
+      setDeckPlayback(deck, playing);
     },
     update(values) {
       if (mode === "live") audio.update({ ...initialValues, ...values });

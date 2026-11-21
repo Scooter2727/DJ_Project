@@ -10,9 +10,13 @@ export const BEAT_TRACK = {
 export function chartForBpm(bpm) {
   const rounded = Math.round(Number(bpm));
   const safe = Math.min(BEAT_TRACK.maxBpm, Math.max(BEAT_TRACK.minBpm, Number.isFinite(rounded) ? rounded : BEAT_TRACK.bpm));
-  const intervalMs = 60000 / safe;
+  return chartForTempo(safe);
+}
+
+export function chartForTempo(tempo) {
+  const intervalMs = 60000 / tempo;
   return {
-    bpm: safe,
+    bpm: tempo,
     loopMs: intervalMs * BEAT_TRACK.beatsPerLoop,
     cues: BEAT_TRACK.cueBeats.map(beat => beat * intervalMs),
     leadMs: BEAT_TRACK.leadMs,

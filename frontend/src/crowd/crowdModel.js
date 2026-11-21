@@ -6,21 +6,34 @@ export const DEFAULT_CROWD_CONFIG = {
 
 const clamp = value => Math.min(100, Math.max(0, value));
 
-export const BEAT_POINTS = { perfect: 10, good: 5, miss: 0, offbeat: -3 };
+const CROWD_RATES = { perfect: 8, good: 2, miss: -1.25 };
+const CONSECUTIVE_MISS_RATE = -9;
+const CROWD_RESPONSE_SECONDS = 0.18;
 export const BOTH_ARMS_MULTIPLIER = 1.5;
 
-export function beatPoints(judgment, bothArms = false) {
-  const points = BEAT_POINTS[judgment] ?? 0;
-  return points > 0 && bothArms ? points * BOTH_ARMS_MULTIPLIER : points;
+export function crowdRateForBeat(judgment, bothArms = false, consecutiveMisses = 0) {
+  if (judgment === "miss" && consecutiveMisses >= 2) return CONSECUTIVE_MISS_RATE;
+  const rate = CROWD_RATES[judgment] ?? 0;
+  return rate > 0 && bothArms ? rate * BOTH_ARMS_MULTIPLIER : rate;
 }
 
-export function applyBeatResult(happiness, judgment, bothArms = false) {
-  return clamp(happiness + beatPoints(judgment, bothArms));
+export function createCrowdMeter(level) {
+  return { level, velocity: 0 };
 }
 
-export function decayCrowd(happiness, elapsedSeconds, perSecond = 1.6) {
-  if (elapsedSeconds <= 0) return clamp(happiness);
-  return clamp(happiness - perSecond * Math.min(elapsedSeconds, 0.25));
+export function advanceCrowdMeter(meter, elapsedSeconds, rate) {
+  if (elapsedSeconds <= 0 || (meter.velocity === 0 && rate === 0)) return meter;
+  const elapsed = Math.min(elapsedSeconds, 0.25);
+  const remaining = Math.exp(-elapsed / CROWD_RESPONSE_SECONDS);
+  const initialVelocity = rate * meter.velocity < 0 ? 0 : meter.velocity;
+  const speedDifference = initialVelocity - rate;
+  const velocity = rate + speedDifference * remaining;
+  const distance = rate * elapsed + speedDifference * CROWD_RESPONSE_SECONDS * (1 - remaining);
+  const level = clamp(meter.level + distance);
+  const reachedLimit = (level === 0 && velocity < 0) || (level === 100 && velocity > 0);
+  if (reachedLimit) return level === meter.level && meter.velocity === 0 ? meter : createCrowdMeter(level);
+  if (rate === 0 && Math.abs(velocity) < 0.005) return createCrowdMeter(level);
+  return { level, velocity };
 }
 
 export function smoothToward(current, target, elapsedSeconds, responseSeconds = 0.35) {

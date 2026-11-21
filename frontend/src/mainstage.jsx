@@ -1,9 +1,12 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { decodeMidi } from "./midi.js";
 import { MixAudioEngine } from "./audio.js";
 import { buildMixChart, ROW_BY_CONTROL } from "./mixChart.js";
 import { createMixSession } from "./mixSession.js";
+import { DEFAULT_DANCE_CONFIG } from "./crowd/danceScorer.js";
+import { createMainstageHype, STARTING_HYPE } from "./crowd/mainstageHype.js";
+import { usePoseTracker } from "./crowd/usePoseTracker.js";
 import "./mainstage.css";
 
 const ROWS = Object.values(ROW_BY_CONTROL);
@@ -23,7 +26,11 @@ function MainstageApp() {
   const pageRef = useRef(null);
   const screenRef = useRef(null);
   const sessionRef = useRef(null);
+  const cameraVideoRef = useRef(null);
+  const hypeRef = useRef(null);
+  const hypeMeterRef = useRef(null);
   const audioRef = useRef(null);
+  const playbackButtonState = useRef(false);
   const valuesRef = useRef({});
   const modeRef = useRef("title");
   const [mode, setMode] = useState("title");
@@ -36,6 +43,7 @@ function MainstageApp() {
   const [cameraOn, setCameraOn] = useState(false);
   const [mix, setMix] = useState(null);
   const [transport, setTransport] = useState("ready");
+  const gameMix = mode === "game" ? mix : null;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -54,12 +62,36 @@ function MainstageApp() {
     }
     return audioRef.current;
   }
+  const [previewPlaying, setPreviewPlaying] = useState(false);
+  const previewDeck = selectedTrack.id === "levels" ? "b" : "a";
+  if (hypeRef.current === null) hypeRef.current = createMainstageHype();
+
+  const readPlayback = useCallback(() => {
+    const playback = audioRef.current?.playbackPosition();
+    if (!playback) return null;
+    const deck = playback.deck === "a" ? gameMix?.manifest.deckA : gameMix?.manifest.deckB;
+    return { ...playback, tempo: deck?.tempo, beatOffsetMs: (deck?.beatOffsetSeconds ?? 0) * 1000 };
+  }, [gameMix]);
+
+  const onPoseFrame = useCallback(frame => {
+    if (modeRef.current === "game") hypeRef.current.awardFlick(readPlayback(), frame, performance.now());
+  }, [readPlayback]);
+
+  const camera = usePoseTracker({ videoRef: cameraVideoRef, config: DEFAULT_DANCE_CONFIG, maxFps: 24, onFrame: onPoseFrame });
+  const { start: startCamera, stop: stopCamera } = camera;
+  const cameraFailed = cameraOn && camera.status === "error" && !camera.cameraActive;
 
   const F = () => window.FLXHero;
 
   useEffect(() => {
     modeRef.current = mode;
   }, [mode]);
+
+  useEffect(() => {
+    if (!cameraOn) return undefined;
+    startCamera();
+    return () => stopCamera();
+  }, [cameraOn, startCamera, stopCamera]);
 
   useEffect(() => {
     const api = F();
@@ -114,6 +146,10 @@ function MainstageApp() {
         index: 0,
         keyboard: true,
         onConfirm: track => {
+          if (track.id !== selectedTrack.id) {
+            audioRef.current?.stop();
+            hypeRef.current = createMainstageHype();
+          }
           setSelectedTrack(track);
           setMode("game");
         },
@@ -131,6 +167,18 @@ function MainstageApp() {
       source: session.source,
       knobSmoothing: 0.035,
       show: { venue: true, crowd: true, deck: true, hud: true, webcam: true },
+      getCrowdHype: dt => {
+        const playing = audioRef.current?.isPlaying(previewDeck) ?? false;
+        if (playing !== playbackButtonState.current) {
+          playbackButtonState.current = playing;
+          setPreviewPlaying(playing);
+        }
+        const frame = hypeRef.current.frame(readPlayback(), dt);
+        const value = String(Math.floor(frame.level));
+        const meter = hypeMeterRef.current;
+        if (meter && meter.getAttribute("aria-valuenow") !== value) meter.setAttribute("aria-valuenow", value);
+        return frame;
+      },
     });
     screenRef.current = screen;
     session.attach(screen);
@@ -141,7 +189,11 @@ function MainstageApp() {
       session.destroy();
       screen.destroy();
     };
-  }, [mode, mode === "game" ? mix : null, selectedTrack]);
+  }, [mode, selectedTrack, gameMix, previewDeck, readPlayback]);
+
+  useEffect(() => {
+    screenRef.current?.setWebcam(cameraOn ? cameraVideoRef.current : null);
+  }, [mode, gameMix, cameraOn]);
 
   useEffect(() => {
     if (!access) return undefined;
@@ -238,38 +290,39 @@ function MainstageApp() {
     setConnected(false);
   }
 
-  async function toggleCamera() {
-    if (!screenRef.current) return;
-    if (cameraOn) {
-      screenRef.current.setWebcam(null);
-      setCameraOn(false);
-      return;
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-      screenRef.current.setWebcam(stream);
-      setCameraOn(true);
-    } catch (error) {
-      setMessage("Camera unavailable: " + error.message);
-    }
+  function toggleCamera() {
+    if (cameraFailed) startCamera();
+    else setCameraOn(current => !current);
+  }
+
+  function openMainMenu() {
+    setCameraOn(false);
+    audioRef.current?.stop();
+    hypeRef.current = createMainstageHype();
+    setMode("title");
   }
 
   return <main className="mainstage-shell">
+    <video className="mainstage-camera-source" ref={cameraVideoRef} muted playsInline aria-hidden="true" />
+    {mode === "game" && <div className="mainstage-hype-accessible" ref={hypeMeterRef} role="meter" aria-label="Crowd hype" aria-valuemin={0} aria-valuemax={100} aria-valuenow={STARTING_HYPE} />}
     <div className="mainstage-stage" ref={mountRef} />
     <div className="mainstage-controls" aria-label="MAINSTAGE controls">
-      <button className="mainstage-button" onClick={mode === "title" ? () => setMode("select") : () => setMode("title")}>
+      <button className="mainstage-button" onClick={mode === "title" ? () => setMode("select") : openMainMenu}>
         {mode === "title" ? "Start" : "Main menu"}
       </button>
       {mode === "game" && <button className="mainstage-button" onClick={() => setMode("select")}>Tracks</button>}
       {mode === "game" && <button className="mainstage-button" disabled={!mix} onClick={() => sessionRef.current?.preview()}>
         {transport === "demo" || transport === "live" ? "Stop mix" : "Preview mix"}
       </button>}
+      {mode === "game" && <button className="mainstage-button" disabled={!mix} onClick={() => sessionRef.current?.togglePlayback()}>
+        {previewPlaying ? "Pause track" : "Play track"}
+      </button>}
       <button className="mainstage-button" disabled={!mix} onClick={access ? disconnect : connect}>{access ? "Disconnect DDJ" : "Connect DDJ-FLX4"}</button>
-      {mode === "game" && <button className="mainstage-button" onClick={toggleCamera}>{cameraOn ? "Hide camera" : "Use camera"}</button>}
+      {mode === "game" && <button className="mainstage-button" onClick={toggleCamera}>{cameraFailed ? "Retry camera" : cameraOn ? "Hide camera" : "Use camera"}</button>}
       {ports.length > 1 && <select className="mainstage-select" value={selectedPort} onChange={event => setSelectedPort(event.target.value)} aria-label="MIDI input">
         {ports.map(input => <option key={input.id} value={input.id}>{input.name || "MIDI input"}</option>)}
       </select>}
-      <span className={connected ? "mainstage-status online" : "mainstage-status"}>{message || (mode === "game" && transport === "finished" ? "Mix complete" :
+      <span className={connected ? "mainstage-status online" : "mainstage-status"}>{(cameraOn && camera.status === "error" && camera.message) || message || (mode === "game" && transport === "finished" ? "Mix complete" :
         mode === "game" && transport === "ready" && connected ? (selectedTrack.id === "levels" ? "Spin right clockwise to start Levels" : "Spin left counterclockwise to start Heroes") :
         connected ? "DDJ connected" : selectedTrack.name)}</span>
     </div>

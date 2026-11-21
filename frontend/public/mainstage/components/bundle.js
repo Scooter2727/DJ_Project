@@ -404,35 +404,49 @@
 
   // ---------------------------------------------------------------- Crowd (retro layer)
   // energy 0..1: sway + head bob -> arms up -> jumping -> whole room on the beat
-  function Crowd(seed, people) {
+  function Crowd(seed, people, expandable) {
     var r = rng(seed || 7), self = this;
     this.people = [];
     if (people) { this.people = people; return; }
-    [{ y: 320, s: 0.62, n: 24, shade: 0.35 }, { y: 390, s: 0.85, n: 17, shade: 0.6 }, { y: 470, s: 1.15, n: 11, shade: 0.9 }].forEach(function (row) {
+    var rows = [{ y: 320, s: 0.62, n: 24, shade: 0.35 }, { y: 390, s: 0.85, n: 17, shade: 0.6 }, { y: 470, s: 1.15, n: 11, shade: 0.9 }];
+    if (expandable) rows.push({ y: 342, s: 0.69, n: 14, shade: 0.48, tier: 2 }, { y: 424, s: 0.95, n: 16, shade: 0.76, tier: 3 });
+    rows.forEach(function (row) {
       for (var i = 0; i < row.n; i++) {
         self.people.push({
           x: (i + 0.5 + (r() - 0.5) * 0.6) * W / row.n, y: row.y + (r() - 0.5) * 14, s: row.s * (0.88 + r() * 0.24),
           shade: row.shade, armT: 0.12 + r() * 0.62, jumpT: 0.45 + r() * 0.4, ph: r() * 6.28, tone: r(), hair: r() < 0.45,
-          arm: 0, jump: 0, oneArm: r() < 0.35, stick: r() < 0.45, stickCol: [C.laser, C.cyan, C.magenta, C.amber][(r() * 4) | 0]
+          arm: 0, jump: 0, oneArm: r() < 0.35, stick: r() < 0.45, stickCol: [C.laser, C.cyan, C.magenta, C.amber][(r() * 4) | 0],
+          tier: row.tier, opacity: row.tier ? 0 : 1
         });
       }
     });
+    if (expandable) this.people.sort(function (a, b) { return a.y - b.y; });
   }
-  Crowd.prototype.update = function (dt, e) {
+  Crowd.prototype.update = function (dt, e, tier) {
     this.people.forEach(function (p) {
       var armTgt = e > p.armT ? 1 : 0, jumpTgt = e > p.jumpT || e > 0.88 ? 1 : 0;
       p.arm += (armTgt - p.arm) * Math.min(1, dt * 4);
       p.jump += (jumpTgt - p.jump) * Math.min(1, dt * 3);
+      if (p.tier) p.opacity += ((tier >= p.tier ? 1 : 0) - p.opacity) * Math.min(1, dt * 3);
     });
   };
   Crowd.prototype.draw = function (ctx, o) {
     var e = o.e, t = o.t, bp = o.beat - Math.floor(o.beat);
+    var celebration = o.celebration;
+    var cheer = celebration ? Math.min(1, celebration.elapsed * 5, (celebration.duration - celebration.elapsed) * 2.5) : 0;
+    var cheerBeat = celebration ? celebration.elapsed * o.tempo / 60 : 0;
     var rim = [C.violet, C.magenta, C.cyan];
     this.people.forEach(function (p, idx) {
+      if (p.tier && p.opacity < 0.015) return;
+      if (p.tier) { ctx.save(); ctx.globalAlpha *= p.opacity; }
       var h = 120 * p.s;
       var sway = Math.sin(t * 1.7 + p.ph) * 6 * p.s * (1 - 0.4 * e);
       var bob = Math.sin((bp + p.ph * 0.015) * Math.PI * 2) * 3 * p.s * (0.6 + e);
       var hop = p.jump * Math.abs(Math.sin(bp * Math.PI)) * 18 * p.s;
+      if (cheer > 0) {
+        var jumpPhase = mod(cheerBeat + p.ph * 0.06, 1);
+        hop = lerp(hop, 64 * p.s * Math.sin(jumpPhase * Math.PI), cheer);
+      }
       var x = p.x + sway, base = p.y - hop;
       var v = p.shade * (0.55 + 0.6 * e);
       var body = 'rgb(' + ((8 + 16 * v * (0.6 + p.tone * 0.4)) | 0) + ',' + ((6 + 8 * v) | 0) + ',' + ((14 + 20 * v) | 0) + ')';
@@ -443,8 +457,8 @@
       ctx.strokeStyle = hexA(rim[idx % 3], 0.4 + 0.4 * e * p.shade); ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(x - 0.17 * h, base - 0.8 * h); ctx.lineTo(x + 0.17 * h, base - 0.8 * h); ctx.stroke();
       ctx.strokeStyle = body; ctx.lineWidth = 0.075 * h;
       [-1, 1].forEach(function (sg) {
-        var a = p.oneArm && sg < 0 ? p.arm * 0.25 : p.arm;
-        var pump = Math.sin(bp * Math.PI * 2 + p.ph) * 0.04 * h * a;
+        var a = lerp(p.oneArm && sg < 0 ? p.arm * 0.25 : p.arm, 1, cheer);
+        var pump = Math.sin(lerp(bp, cheerBeat, cheer) * Math.PI * 2 + p.ph) * (0.04 + 0.07 * cheer) * h * a;
         var sx = x + sg * 0.15 * h, sy = base - 0.77 * h;
         var ex = lerp(x + sg * 0.21 * h, x + sg * 0.25 * h, a), ey = lerp(base - 0.57 * h + bob * 0.3, base - 0.98 * h, a);
         var hx = lerp(x + sg * 0.19 * h + sway * 0.1, x + sg * 0.19 * h, a), hy = lerp(base - 0.4 * h, base - 1.2 * h + pump, a);
@@ -456,6 +470,7 @@
       ctx.fillStyle = body; poly(ctx, pts); ctx.fill();
       ctx.strokeStyle = hexA(rim[idx % 3], 0.6 + 0.4 * e * p.shade); ctx.lineWidth = 4;
       ctx.beginPath(); ctx.arc(hx0, hy0, hr, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke();
+      if (p.tier) ctx.restore();
     });
   };
 
@@ -897,24 +912,105 @@
   }
   // left column: score, then combo (with multiplier and hype) underneath. top right: webcam slot.
   var CAM = { x: W - 414, y: 20, w: 392, h: 221 };   // 16:9 inner frame for the player's live webcam
+  var HYPE_BAR = { x: CAM.x - 86, y: CAM.y + 27, w: 52, h: CAM.h - 51 };
+
+  function drawHypeMeter(ctx, frame) {
+    var r = HYPE_BAR, color = [C.violet, C.cyan, C.amber, C.magenta][frame.tier];
+    var x = r.x + 9, y = r.y + 5, w = r.w - 18, h = r.h - 10;
+    var fill = h * clamp(frame.level / 100, 0, 1);
+    ctx.save();
+    plate(ctx, r.x - 8, CAM.y - 12, r.w + 16, CAM.h + 24);
+    ctx.fillStyle = C.ink; ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = frame.celebration ? C.cream : color;
+    ctx.fillRect(x, y + h - fill, w, fill);
+    if (fill > 0) {
+      ctx.fillStyle = hexA(C.cream, 0.5); ctx.fillRect(x, y + h - fill, w, Math.min(fill, 3));
+    }
+    for (var i = 1; i <= 3; i++) {
+      ctx.fillStyle = hexA(C.cream, 0.5); ctx.fillRect(x - 3, y + h * i / 4, w + 6, 1);
+    }
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = C.cream;
+    ctx.font = '10px ' + FONT; ctx.fillText('HYPE', r.x + r.w / 2, CAM.y + 9);
+    ctx.font = '12px ' + FONT; ctx.fillText(Math.floor(frame.level) + '%', r.x + r.w / 2, CAM.y + CAM.h - 7);
+    ctx.restore();
+  }
+
+  function drawHypeTempo(ctx, frame) {
+    if (!frame.windows) return;
+    var x = HYPE_BAR.x, y = CAM.y + CAM.h + 33, w = CAM.x + CAM.w - x, h = 18;
+    var width = w - 88, edge = frame.cueLine / 100;
+    var good = frame.windows.good, perfect = frame.windows.perfect;
+    ctx.save();
+    plate(ctx, x - 8, y - 7, w + 20, h + 14);
+    ctx.fillStyle = C.ink; ctx.fillRect(x, y, width, h);
+    ctx.fillStyle = hexA(C.cyan, 0.27); ctx.fillRect(x + width * good.left / 100, y, width * good.width / 100, h);
+    ctx.fillStyle = hexA(C.amber, 0.32); ctx.fillRect(x + width * perfect.left / 100, y, width * perfect.width / 100, h);
+    ctx.fillStyle = C.amber; ctx.fillRect(x + width * edge, y - 2, 2, h + 4);
+    frame.bars.forEach(function (bar) {
+      ctx.fillStyle = bar.zone === 'perfect' ? C.amber : C.cyan;
+      ctx.fillRect(x + width * bar.left / 100 - 4, y + 3, 4, h - 6);
+    });
+    ctx.font = '9px ' + FONT; ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; ctx.fillStyle = C.cream;
+    ctx.fillText(frame.tempo + ' BPM', x + w, y + h / 2);
+    ctx.restore();
+  }
+
+  function createHypeConfetti(id) {
+    var random = rng(id + 30), colors = [C.cyan, C.amber, C.magenta, C.violet, C.cream, C.laser];
+    return Array.from({ length: 220 }, function (_, index) {
+      return {
+        color: colors[index % colors.length], size: 5 + random() * 9,
+        delay: random() ** 2 * 0.65, landingX: random() * W,
+        launchSpeed: 58 + random() * 114, fallSpeed: 100 + random() * 86,
+        spin: (random() - 0.5) * 8, phase: random() * Math.PI * 2,
+        foreground: index % 3 !== 0
+      };
+    });
+  }
+
+  function drawHypeConfetti(ctx, confetti, celebration, foreground) {
+    var x = HYPE_BAR.x + HYPE_BAR.w / 2, y = HYPE_BAR.y - 12;
+    var gravity = 560;
+    ctx.save();
+    ctx.globalAlpha = clamp((celebration.duration - celebration.elapsed) / 0.65, 0, 1);
+    confetti.forEach(function (piece) {
+      var age = celebration.elapsed - piece.delay;
+      if (age < 0 || piece.foreground !== foreground) return;
+      // Fan out quickly, then ease into a slow flutter at the falling speed.
+      var ballisticTime = Math.min(age, (piece.launchSpeed + piece.fallSpeed) / gravity);
+      var drop = -piece.launchSpeed * ballisticTime + gravity * ballisticTime * ballisticTime / 2
+        + piece.fallSpeed * (age - ballisticTime);
+      var drift = Math.sin(age * 3 + piece.phase) * 20 * Math.min(age, 1);
+      var px = lerp(x, piece.landingX, 1 - Math.exp(-1.1 * age)) + drift;
+      var flip = 0.25 + 0.75 * Math.abs(Math.cos(age * 6 + piece.phase));
+      ctx.save();
+      ctx.translate(px, y + drop);
+      ctx.rotate(age * piece.spin + piece.phase);
+      ctx.fillStyle = piece.color;
+      ctx.fillRect(-piece.size / 2, -piece.size * flip / 2, piece.size, piece.size * flip);
+      ctx.restore();
+    });
+    ctx.restore();
+  }
   var HUD = {
     cam: CAM,
-    // s: {score, combo, multiplier, energy, mode, beat}
+    // s: {score, combo, multiplier, energy, mode, beat, hasCrowdHype}
     draw: function (ctx, s) {
       ctx.save(); ctx.textBaseline = 'alphabetic';
       plate(ctx, 22, 20, 330, 92);
       ctx.font = '12px ' + FONT; ctx.fillStyle = C.creamDim; ctx.textAlign = 'left'; ctx.fillText('SCORE', 44, 50);
       ctx.font = '30px ' + FONT; ctx.fillStyle = C.cream; ctx.fillText(pad(s.score, 7), 44, 93);
-      plate(ctx, 22, 122, 330, 112);
+      plate(ctx, 22, 122, 330, s.hasCrowdHype ? 86 : 112);
       ctx.font = '12px ' + FONT; ctx.fillStyle = C.creamDim; ctx.fillText('COMBO', 44, 152);
       ctx.textAlign = 'right'; ctx.fillStyle = C.amber; ctx.fillText('MULTI x' + (s.multiplier || 1), 330, 152);
       ctx.textAlign = 'left'; ctx.font = '30px ' + FONT; ctx.fillStyle = C.cream; ctx.fillText(String(s.combo || 0), 44, 193);
-      // hype meter (crowd energy), segmented, inside the combo plate
       var e = clamp(s.energy || 0, 0, 1), k, segs = 16;
-      ctx.font = '8px ' + FONT; ctx.fillStyle = C.creamDim; ctx.fillText('HYPE', 44, 219);
-      for (k = 0; k < segs; k++) {
-        var on = k < Math.round(e * segs), col = k > 12 ? C.magenta : k > 7 ? C.violet : C.cyan;
-        ctx.fillStyle = on ? col : 'rgba(246,236,214,.12)'; ctx.fillRect(90 + k * 14.5, 209, 11, 11);
+      if (!s.hasCrowdHype) {
+        ctx.font = '8px ' + FONT; ctx.fillStyle = C.creamDim; ctx.fillText('HYPE', 44, 219);
+        for (k = 0; k < segs; k++) {
+          var on = k < Math.round(e * segs), col = k > 12 ? C.magenta : k > 7 ? C.violet : C.cyan;
+          ctx.fillStyle = on ? col : 'rgba(246,236,214,.12)'; ctx.fillRect(90 + k * 14.5, 209, 11, 11);
+        }
       }
       // Stack the EQ below the score and combo so falling notes have a clear entrance.
       ctx.translate(37 - (W / 2 - 150), 244 - 16);
@@ -1238,7 +1334,9 @@
     var L = makeLayout({ rows: opts.rows, camera: opts.camera });
     var source = opts.source || null;
     var show = Object.assign({ venue: true, crowd: true, hud: true, deck: true }, opts.show || {});
-    var crowd = new Crowd(7), fx = new HitFX(), eq = new Equalizer(16);
+    var crowd = new Crowd(7, null, Boolean(opts.getCrowdHype)), fx = new HitFX(), eq = new Equalizer(16);
+    var crowdEnergy = null, confetti = null;
+    var reducedMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
     var webcam = null, webcamMirror = opts.webcamMirror !== false;
     function setWebcam(src) {
       if (!src) { webcam = null; return; }
@@ -1283,7 +1381,16 @@
       var target = typeof f.energy === 'number' ? clamp(f.energy, 0, 1) : clamp((f.combo || 0) / 20, 0, 1);
       energy += (target - energy) * Math.min(1, dt * (target > energy ? 1.6 : 0.45));
       lastCombo = f.combo || 0;
-      crowd.update(dt, energy);
+      var hype = opts.getCrowdHype ? opts.getCrowdHype(dt) : null;
+      var celebration = reducedMotion ? null : hype?.celebration;
+      if (celebration && (!confetti || confetti.id !== celebration.id)) {
+        confetti = { id: celebration.id, pieces: createHypeConfetti(celebration.id) };
+      } else if (!celebration) confetti = null;
+      var excitement = hype ? (hype.celebration ? 1 : [energy, 0.43, 0.67, 0.94][hype.tier]) : energy;
+      if (crowdEnergy === null) crowdEnergy = excitement;
+      crowdEnergy += (excitement - crowdEnergy) * Math.min(1, dt * 3.2);
+      var crowdTier = hype && hype.celebration ? 3 : hype?.tier;
+      crowd.update(dt, hype ? crowdEnergy : energy, crowdTier);
       fx.update(dt);
       eq.update(dt, f.audio || sampleAudio(f.time, bpm), tAbs);
       // knob smoothing
@@ -1315,7 +1422,8 @@
       var vo = { t: tAbs, e: energy, beat: beat, fxOn: energy > 0.6, eq: eq };
       stage.beginLow();
       if (show.venue) Venue.draw(stage.low, vo); else { stage.low.fillStyle = C.void; stage.low.fillRect(0, 0, W, H); }
-      if (show.crowd) crowd.draw(stage.low, vo);
+      if (show.hud && confetti) drawHypeConfetti(stage.low, confetti.pieces, celebration, false);
+      if (show.crowd) crowd.draw(stage.low, hype ? { t: tAbs, e: crowdEnergy, beat: hype.beat ?? beat, tempo: hype.tempo ?? bpm, celebration: celebration } : vo);
       if (show.venue) Venue.drawBeams(stage.low, vo);
       if (show.venue) bloom(stage.low, 446, 0.4 + 0.25 * energy);
       Venue.drawBooth(stage.low, vo);
@@ -1324,6 +1432,7 @@
 
       // sharp layer
       var s = stage.sharp; s.setTransform(1, 0, 0, 1, 0, 0); s.clearRect(0, 0, W, H);
+      if (show.hud && confetti) drawHypeConfetti(s, confetti.pieces, celebration, true);
       NoteLanes.draw(s, L, { time: f.time, approach: approach, spb: spb });
       NoteLanes.drawGuides(s, L, upcoming, f.traces);
       if (show.deck) Deck.drawOverlay(s, L, knobs, clock);
@@ -1350,8 +1459,12 @@
         s.fillStyle = C.cream; s.fillText(f.entryCue, jog.x, jog.y); s.restore();
       }
       fx.draw(s);
-      if (show.hud) HUD.draw(s, { score: f.score, combo: f.combo, multiplier: f.multiplier, energy: energy, mode: f.mode, beat: beat, recordedMix: f.recordedMix });
+      if (show.hud) HUD.draw(s, { score: f.score, combo: f.combo, multiplier: f.multiplier, energy: energy, mode: f.mode, beat: beat, recordedMix: f.recordedMix, hasCrowdHype: Boolean(hype) });
       if (show.hud && show.webcam !== false) HUD.drawWebcam(s, webcam, { mirror: webcamMirror, t: tAbs });
+      if (show.hud && hype) {
+        drawHypeMeter(s, hype);
+        drawHypeTempo(s, hype);
+      }
     }
     stage.run(render);
 

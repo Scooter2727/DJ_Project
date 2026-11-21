@@ -11,12 +11,14 @@ export function usePoseTracker({ videoRef, config, maxFps = 15, onFrame }) {
   const [snapshot, setSnapshot] = useState({
     status: "off",
     message: "Camera is off",
+    cameraActive: false,
     landmarks: null,
     metrics: EMPTY_METRICS,
     gestures: EMPTY_GESTURES,
     inferenceMs: 0,
   });
   const mounted = useRef(true);
+  const request = useRef(null);
   const stream = useRef(null);
   const landmarker = useRef(null);
   const animation = useRef(null);
@@ -30,6 +32,7 @@ export function usePoseTracker({ videoRef, config, maxFps = 15, onFrame }) {
   useEffect(() => { onFrameRef.current = onFrame; }, [onFrame]);
 
   const stop = useCallback(() => {
+    request.current = null;
     if (animation.current !== null) cancelAnimationFrame(animation.current);
     animation.current = null;
     stream.current?.getTracks().forEach(track => track.stop());
@@ -42,6 +45,7 @@ export function usePoseTracker({ videoRef, config, maxFps = 15, onFrame }) {
     if (mounted.current) setSnapshot({
       status: "off",
       message: "Camera is off",
+      cameraActive: false,
       landmarks: null,
       metrics: EMPTY_METRICS,
       gestures: EMPTY_GESTURES,
@@ -50,15 +54,18 @@ export function usePoseTracker({ videoRef, config, maxFps = 15, onFrame }) {
   }, [videoRef]);
 
   const start = useCallback(async () => {
-    if (stream.current || landmarker.current) return;
+    if (request.current) return;
     if (!navigator.mediaDevices?.getUserMedia) {
       setSnapshot(current => ({ ...current, status: "error", message: "Camera needs HTTPS or localhost." }));
       return;
     }
 
+    const attempt = {};
+    request.current = attempt;
+    let cameraReady = false;
     try {
       setSnapshot(current => ({ ...current, status: "loading", message: "Requesting camera…" }));
-      stream.current = await navigator.mediaDevices.getUserMedia({
+      const cameraStream = await navigator.mediaDevices.getUserMedia({
         audio: false,
         video: {
           facingMode: "user",
@@ -67,20 +74,23 @@ export function usePoseTracker({ videoRef, config, maxFps = 15, onFrame }) {
           frameRate: { ideal: 24, max: 30 },
         },
       });
-      if (!mounted.current) {
-        stream.current.getTracks().forEach(track => track.stop());
-        stream.current = null;
+      if (request.current !== attempt) {
+        cameraStream.getTracks().forEach(track => track.stop());
         return;
       }
       const video = videoRef.current;
-      video.srcObject = stream.current;
+      stream.current = cameraStream;
+      video.srcObject = cameraStream;
       await video.play();
+      if (request.current !== attempt) return;
+      cameraReady = true;
 
-      setSnapshot(current => ({ ...current, status: "loading", message: "Loading pose model…" }));
+      setSnapshot(current => ({ ...current, status: "loading", cameraActive: true, message: "Loading pose model…" }));
       // Keep this as a browser-side CDN import so the app can build even when
       // the optional MediaPipe package has not been installed locally yet.
       const { FilesetResolver, PoseLandmarker } = await import(/* @vite-ignore */ MEDIAPIPE_MODULE_URL);
       const vision = await FilesetResolver.forVisionTasks(WASM_ROOT);
+      if (request.current !== attempt) return;
       const options = {
         baseOptions: { modelAssetPath: MODEL_URL, delegate: "GPU" },
         runningMode: "VIDEO",
@@ -90,24 +100,25 @@ export function usePoseTracker({ videoRef, config, maxFps = 15, onFrame }) {
         minTrackingConfidence: 0.5,
         outputSegmentationMasks: false,
       };
+      let tracker;
       try {
-        landmarker.current = await PoseLandmarker.createFromOptions(vision, options);
+        tracker = await PoseLandmarker.createFromOptions(vision, options);
       } catch {
-        landmarker.current = await PoseLandmarker.createFromOptions(vision, {
+        if (request.current !== attempt) return;
+        tracker = await PoseLandmarker.createFromOptions(vision, {
           ...options,
           baseOptions: { modelAssetPath: MODEL_URL, delegate: "CPU" },
         });
       }
-      if (!mounted.current) {
-        landmarker.current.close();
-        landmarker.current = null;
-        stream.current?.getTracks().forEach(track => track.stop());
-        stream.current = null;
+      if (request.current !== attempt) {
+        tracker.close();
         return;
       }
+      landmarker.current = tracker;
       setSnapshot(current => ({ ...current, status: "tracking", message: "Pose model ready" }));
 
       const loop = now => {
+        if (request.current !== attempt) return;
         const activeVideo = videoRef.current;
         const interval = 1000 / maxFps;
         if (
@@ -120,45 +131,49 @@ export function usePoseTracker({ videoRef, config, maxFps = 15, onFrame }) {
           lastInferenceAt.current = now;
           const started = performance.now();
           landmarker.current.detectForVideo(activeVideo, now, result => {
+            if (request.current !== attempt) return;
             const landmarks = result.landmarks?.[0] ?? null;
             const analyzed = analyzeDance(landmarks, now, danceState.current, configRef.current);
             danceState.current = analyzed.state;
             const next = {
               status: landmarks ? "tracking" : "no-pose",
               message: landmarks ? "Dancer tracked" : "Step back so your arms are visible",
+              cameraActive: true,
               landmarks,
               metrics: analyzed.metrics,
               gestures: analyzed.gestures,
+              flickAt: analyzed.flickAt,
+              timestamp: now,
               inferenceMs: performance.now() - started,
             };
             if (mounted.current) setSnapshot(next);
             onFrameRef.current?.(next);
           });
         }
-        animation.current = requestAnimationFrame(loop);
+        if (request.current === attempt) animation.current = requestAnimationFrame(loop);
       };
       animation.current = requestAnimationFrame(loop);
     } catch (error) {
-      stream.current?.getTracks().forEach(track => track.stop());
-      stream.current = null;
+      if (request.current !== attempt) return;
+      if (!cameraReady) stop();
       const denied = error?.name === "NotAllowedError";
       if (mounted.current) setSnapshot(current => ({
         ...current,
         status: "error",
-        message: denied ? "Camera permission was denied." : `Camera could not start: ${error?.message || "Unknown error"}`,
+        message: cameraReady
+          ? `Pose tracking unavailable: ${error?.message || "Unknown error"}`
+          : denied ? "Camera permission was denied." : `Camera could not start: ${error?.message || "Unknown error"}`,
       }));
     }
-  }, [maxFps, videoRef]);
+  }, [maxFps, stop, videoRef]);
 
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
-      if (animation.current !== null) cancelAnimationFrame(animation.current);
-      stream.current?.getTracks().forEach(track => track.stop());
-      landmarker.current?.close();
+      stop();
     };
-  }, []);
+  }, [stop]);
 
   return { ...snapshot, start, stop };
 }

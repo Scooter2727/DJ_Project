@@ -20,6 +20,7 @@ export class MixAudioEngine {
     this.spectrum = new Uint8Array(this.analyser.frequencyBinCount);
     this.playRequests = { a: 0, b: 0 };
     this.analyser.connect(this.context.destination);
+    this.timingDeck = "a";
 
     for (const deck of ["a", "b"]) {
       const player = this.players[deck];
@@ -91,7 +92,7 @@ export class MixAudioEngine {
     if (request !== this.playRequests[deck]) return;
     const player = this.players[deck];
     if (playing) {
-      if (player.paused) await player.play();
+      if (player.paused || player.ended) await player.play();
     } else if (!player.paused) {
       player.pause();
     }
@@ -107,11 +108,31 @@ export class MixAudioEngine {
     this.players[deck].pause();
   }
 
+  isPlaying(deck) {
+    const player = this.players[deck];
+    return !player.paused && !player.ended;
+  }
+
+  playbackPosition() {
+    const otherDeck = this.timingDeck === "a" ? "b" : "a";
+    if (!this.isPlaying(this.timingDeck) && this.isPlaying(otherDeck)) {
+      this.timingDeck = otherDeck;
+    }
+    const player = this.players[this.timingDeck];
+    return {
+      deck: this.timingDeck,
+      positionMs: player.currentTime * 1000,
+      playbackRate: player.playbackRate,
+      playing: this.isPlaying(this.timingDeck) && !player.seeking && player.readyState >= 3 && this.context.state === "running",
+    };
+  }
+
   stop() {
     for (const [deck, player] of Object.entries(this.players)) {
       this.pause(deck);
       player.currentTime = 0;
     }
+    this.timingDeck = "a";
   }
 
   audioFrame() {

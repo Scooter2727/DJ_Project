@@ -1,29 +1,57 @@
-import React, { useEffect, useRef, useState } from "react";
-import { detectArmFlick, createArmFlickState } from "./armFlick.js";
-import { collectMisses, createBeatState, judgeArmFlick } from "./beatJudge.js";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { createArmFlickState, detectArmFlick } from "./armFlick.js";
+import { createBeatState, judgeArmFlick, skippedCueDeadline } from "./beatJudge.js";
 import { BEAT_TRACK, chartForBpm, createBeatTrack } from "./beatTrack.js";
 import { BeatLane } from "./BeatLane.jsx";
-import { applyBeatResult, decayCrowd, smoothToward } from "./crowdModel.js";
+import { advanceCrowdMeter, createCrowdMeter, crowdRateForBeat } from "./crowdModel.js";
 import { DEFAULT_DANCE_CONFIG } from "./danceScorer.js";
 import { usePoseTracker } from "./usePoseTracker.js";
 
 export function DanceScreen() {
   const videoRef = useRef(null);
-  const tracker = usePoseTracker({ videoRef, config: DEFAULT_DANCE_CONFIG, maxFps: 24 });
-  const running = ["loading", "tracking", "no-pose"].includes(tracker.status);
   const started = useRef(false);
   const bpmRef = useRef(BEAT_TRACK.bpm);
   const trackRef = useRef(null);
   const beatRef = useRef(createBeatState());
   const flickRef = useRef(createArmFlickState());
-  const lastDecayAt = useRef(null);
-  const levelRef = useRef(24);
-  const [shown, setShown] = useState(24);
+  const lastFrameAt = useRef(null);
+  const crowdResponse = useRef(null);
+  const skipDeadline = useRef(Infinity);
+  const consecutiveMisses = useRef(0);
+  const [meter, setMeter] = useState(() => createCrowdMeter(24));
   const [songTimeMs, setSongTimeMs] = useState(null);
-  const [judgment, setJudgment] = useState("");
-  const [bothArms, setBothArms] = useState(false);
+  const [result, setResult] = useState(null);
+  const [scoredCues, setScoredCues] = useState(() => new Set());
   const [bpm, setBpm] = useState(BEAT_TRACK.bpm);
   const [chart, setChart] = useState(() => chartForBpm(BEAT_TRACK.bpm));
+
+  const onPoseFrame = useCallback(({ gestures, metrics, timestamp, flickAt }) => {
+    const track = trackRef.current;
+    const songTime = track?.songTimeMs();
+    if (songTime == null || flickAt === null) return;
+
+    const frameTime = songTime - Math.max(0, performance.now() - flickAt);
+    const judged = judgeArmFlick(beatRef.current, frameTime, track.cues, track.loopMs);
+    if (judged.judgment === null) return;
+    if (judged.noteTime === null && !detectArmFlick(flickRef.current, gestures, timestamp).flick) return;
+    flickRef.current = { lastAt: timestamp };
+    beatRef.current = judged.state;
+    const raisedTogether = metrics.armsUp === 2;
+    setResult({ judgment: judged.judgment, bothArms: raisedTogether, timestamp });
+    consecutiveMisses.current = judged.judgment === "miss" ? consecutiveMisses.current + 1 : 0;
+    if (judged.noteTime !== null) {
+      setScoredCues(judged.state.resolved);
+      const nextDeadline = skippedCueDeadline(judged.noteTime, track.cues, track.loopMs);
+      skipDeadline.current = Math.max(skipDeadline.current, nextDeadline);
+    }
+    crowdResponse.current = {
+      rate: crowdRateForBeat(judged.judgment, raisedTogether, consecutiveMisses.current),
+      until: songTime + track.loopMs / track.cues.length,
+    };
+  }, []);
+
+  const tracker = usePoseTracker({ videoRef, config: DEFAULT_DANCE_CONFIG, maxFps: 24, onFrame: onPoseFrame });
+  const running = ["loading", "tracking", "no-pose"].includes(tracker.status);
 
   useEffect(() => {
     if (started.current) return;
@@ -34,20 +62,17 @@ export function DanceScreen() {
   useEffect(() => {
     const track = createBeatTrack(bpmRef.current);
     trackRef.current = track;
+    skipDeadline.current = skippedCueDeadline(null, track.cues, track.loopMs);
     let frame = null;
     const tick = now => {
       const songTime = track.songTimeMs();
       if (songTime !== null) {
-        const elapsed = lastDecayAt.current === null ? 0 : (now - lastDecayAt.current) / 1000;
-        lastDecayAt.current = now;
-        const misses = collectMisses(beatRef.current, songTime, track.cues, track.loopMs);
-        beatRef.current = misses.state;
-        levelRef.current = misses.missed.reduce(happiness => applyBeatResult(happiness, "miss"), decayCrowd(levelRef.current, elapsed));
-        setShown(current => smoothToward(current, levelRef.current, elapsed));
-        if (misses.missed.length) {
-          setJudgment("miss");
-          setBothArms(false);
-        }
+        const elapsed = (now - (lastFrameAt.current ?? now)) / 1000;
+        lastFrameAt.current = now;
+        const response = crowdResponse.current;
+        let rate = response && songTime < response.until ? response.rate : 0;
+        if (songTime > skipDeadline.current) rate = crowdRateForBeat("miss", false, 2);
+        setMeter(current => advanceCrowdMeter(current, elapsed, rate));
         setSongTimeMs(songTime);
       }
       frame = requestAnimationFrame(tick);
@@ -59,23 +84,6 @@ export function DanceScreen() {
       trackRef.current = null;
     };
   }, []);
-
-  useEffect(() => {
-    const track = trackRef.current;
-    const songTime = track?.songTimeMs();
-    if (songTime === null || songTime === undefined) return;
-    const detected = detectArmFlick(flickRef.current, tracker.metrics.burst, performance.now());
-    flickRef.current = detected.state;
-    if (!detected.flick) return;
-    const judged = judgeArmFlick(beatRef.current, songTime, track.cues, track.loopMs);
-    beatRef.current = judged.state;
-    const raisedTogether = tracker.metrics.armsUp === 2;
-    setJudgment(judged.judgment);
-    setBothArms(raisedTogether);
-    const nextLevel = applyBeatResult(levelRef.current, judged.judgment, raisedTogether);
-    if (nextLevel > levelRef.current) setShown(nextLevel);
-    levelRef.current = nextLevel;
-  }, [tracker.metrics]);
 
   function begin() {
     if (!running) tracker.start();
@@ -90,6 +98,10 @@ export function DanceScreen() {
     }
     bpmRef.current = next.bpm;
     beatRef.current = createBeatState();
+    setScoredCues(beatRef.current.resolved);
+    crowdResponse.current = null;
+    consecutiveMisses.current = 0;
+    skipDeadline.current = skippedCueDeadline(null, next.cues, next.loopMs);
     setBpm(next.bpm);
     setChart(next);
     const song = trackRef.current?.songTimeMs();
@@ -97,20 +109,20 @@ export function DanceScreen() {
     begin();
   }
 
-  const percent = Math.round(shown);
+  const percent = Math.round(meter.level);
 
   return <main className="dance-screen" onClick={begin}>
     <video ref={videoRef} muted playsInline autoPlay aria-label="Front camera" />
     <div className="dance-bar" role="meter" aria-label="Crowd level" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
-      <i style={{ height: shown.toFixed(2) + "%" }} />
+      <i style={{ transform: `scaleY(${meter.level / 100})` }} />
     </div>
     <BeatLane
       songTimeMs={songTimeMs}
       cues={chart.cues}
       loopMs={chart.loopMs}
       leadMs={chart.leadMs}
-      judgment={judgment}
-      bothArms={bothArms}
+      result={result}
+      scoredCues={scoredCues}
       bpm={bpm}
       onBpm={changeBpm}
     />

@@ -117,3 +117,24 @@ test("Levels solo uses Deck B audio and only Deck B movements relative to its en
   assert.ok(Math.abs(data.notes[0].time - (chart.notes.find(n => n.channel === 2).time - chart.entry)) < 0.00001);
   assert.equal(frame().entryCue, null);
 });
+
+test("the on-screen playback control pauses and resumes both decks at their mix positions", () => {
+  for (const preview of [true, false]) {
+    const { session, players, frame } = setup();
+    if (preview) session.preview();
+    else session.togglePlayback();
+    players.a.currentTime = chart.entry + 2;
+    if (!preview) session.input("b", true);
+    frame();
+    players.b.currentTime = 2;
+
+    session.togglePlayback();
+    assert.ok(players.a.paused && players.b.paused);
+    assert.equal(frame().time, chart.entry + 2);
+    session.togglePlayback();
+    frame();
+    assert.ok(!players.a.paused && !players.b.paused);
+    assert.equal(players.b.currentTime, 2);
+    assert.equal(session.demo, preview);
+  }
+});
