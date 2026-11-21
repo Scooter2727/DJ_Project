@@ -3,11 +3,8 @@ export const DEFAULT_DANCE_CONFIG = {
   smoothing: 0.32,
   minMotionSpeed: 0.08,
   maxMotionSpeed: 3.2,
-  flickSpeed: 1.55,
-  flickReversalDot: -0.2,
-  flickMinTravel: 0.18,
-  flickWindowMs: 280,
-  flickCooldownMs: 420,
+  flickMinTravel: 0.15,
+  flickWindowMs: 140,
   pumpSpeed: 0.72,
   pumpMinTravel: 0.24,
   pumpWindowMs: 720,
@@ -33,23 +30,22 @@ export const POSE = {
 
 const clamp = (value, min = 0, max = 1) => Math.min(max, Math.max(min, value));
 const length = vector => Math.hypot(vector.x, vector.y);
-const dot = (a, b) => a.x * b.x + a.y * b.y;
-const unit = vector => {
-  const magnitude = length(vector);
-  return magnitude ? { x: vector.x / magnitude, y: vector.y / magnitude } : { x: 0, y: 0 };
-};
 const visible = (point, threshold) =>
-  point && (point.visibility ?? 1) >= threshold && (point.presence ?? 1) >= threshold;
+  point && Number.isFinite(point.x) && Number.isFinite(point.y)
+    && (point.visibility ?? 1) >= threshold && (point.presence ?? 1) >= threshold;
+const relativeTo = (point, origin) => ({ x: point.x - origin.x, y: point.y - origin.y });
+const MAX_POSE_GAP_MS = 150;
+const FLICK_RETURN_DELAY_MS = 375;
 
-function blankArm() {
+function blankArm({ lastPumpAt = -Infinity, lastFlickAt = -Infinity } = {}) {
   return {
     wrist: null,
     elbow: null,
     velocity: { x: 0, y: 0 },
-    travel: 0,
     verticalTravel: 0,
-    lastFlickAt: -Infinity,
-    lastPumpAt: -Infinity,
+    lastPumpAt,
+    lastFlickAt,
+    movementSamples: [],
   };
 }
 
@@ -66,48 +62,52 @@ export function createDanceState() {
 
 function armFrame(side, landmarks, previous, dt, scale, now, config) {
   const prefix = side === "left" ? "left" : "right";
-  const wrist = landmarks[POSE[prefix + "Wrist"]];
-  const elbow = landmarks[POSE[prefix + "Elbow"]];
+  const wristPoint = landmarks[POSE[prefix + "Wrist"]];
+  const elbowPoint = landmarks[POSE[prefix + "Elbow"]];
   const shoulder = landmarks[POSE[prefix + "Shoulder"]];
-  const isVisible = [wrist, elbow, shoulder].every(point => visible(point, config.visibilityThreshold));
+  const isVisible = visible(wristPoint, config.visibilityThreshold) && visible(shoulder, config.visibilityThreshold);
 
-  const aboveShoulder = isVisible && wrist.y < shoulder.y + config.raisedMargin;
-  if (!isVisible || !aboveShoulder) {
+  const wrist = isVisible ? relativeTo(wristPoint, shoulder) : null;
+  const aboveShoulder = Boolean(wrist && wrist.y < config.raisedMargin);
+  if (!aboveShoulder) {
     return {
-      arm: { ...blankArm(), lastFlickAt: previous.lastFlickAt, lastPumpAt: previous.lastPumpAt },
+      arm: { ...blankArm(previous), wrist },
       speed: 0,
       raised: false,
-      flick: false,
+      flickAt: null,
       pump: false,
-      visible: isVisible,
+      visible: Boolean(isVisible),
     };
   }
 
-  if (!previous.wrist || !previous.elbow || dt <= 0) {
+  const elbow = visible(elbowPoint, config.visibilityThreshold) ? relativeTo(elbowPoint, shoulder) : null;
+  const sample = { wrist, timestamp: now };
+  const rearmAt = previous.lastFlickAt + FLICK_RETURN_DELAY_MS;
+  const coolingDown = now < rearmAt;
+  if (!previous.wrist || dt <= 0) {
     return {
-      arm: { ...previous, wrist, elbow, velocity: { x: 0, y: 0 }, travel: 0, verticalTravel: 0 },
+      arm: { ...blankArm(previous), wrist, elbow, movementSamples: coolingDown ? [] : [sample] },
       speed: 0,
       raised: true,
-      flick: false,
+      flickAt: null,
       pump: false,
       visible: true,
     };
   }
 
-  const wristDelta = { x: wrist.x - previous.wrist.x, y: wrist.y - previous.wrist.y };
-  const elbowDelta = { x: elbow.x - previous.elbow.x, y: elbow.y - previous.elbow.y };
+  let start = previous.wrist;
+  if (start.y >= config.raisedMargin) {
+    const crossing = (config.raisedMargin - start.y) / (wrist.y - start.y);
+    start = { x: start.x + (wrist.x - start.x) * crossing, y: config.raisedMargin };
+  }
+  const wristDelta = relativeTo(wrist, start);
   const velocity = { x: wristDelta.x / dt / scale, y: wristDelta.y / dt / scale };
-  const elbowVelocity = { x: elbowDelta.x / dt / scale, y: elbowDelta.y / dt / scale };
   const wristSpeed = length(velocity);
-  const elbowSpeed = length(elbowVelocity);
-  const reversal = dot(unit(previous.velocity), unit(velocity));
-  const elapsedSinceFlick = now - previous.lastFlickAt;
-  const flick = wristSpeed >= config.flickSpeed
-    && length(previous.velocity) >= config.flickSpeed
-    && reversal <= config.flickReversalDot
-    && previous.travel >= config.flickMinTravel
-    && dt * 1000 <= config.flickWindowMs
-    && elapsedSinceFlick >= config.flickCooldownMs;
+  const elbowSpeed = elbow && previous.elbow ? length(relativeTo(elbow, previous.elbow)) / dt / scale : wristSpeed;
+  const recentMovement = coolingDown ? [] : previous.movementSamples.filter(point =>
+    point.timestamp >= rearmAt && now - point.timestamp <= config.flickWindowMs,
+  );
+  const moved = recentMovement.some(sample => length(relativeTo(wrist, sample.wrist)) >= config.flickMinTravel * scale);
 
   const verticalReversal = Math.sign(previous.velocity.y) !== 0
     && Math.sign(velocity.y) !== 0
@@ -124,14 +124,14 @@ function armFrame(side, landmarks, previous, dt, scale, now, config) {
       wrist,
       elbow,
       velocity,
-      travel: flick ? 0 : previous.travel + length(wristDelta) / scale,
       verticalTravel: pump ? 0 : previous.verticalTravel + Math.abs(wristDelta.y) / scale,
-      lastFlickAt: flick ? now : previous.lastFlickAt,
       lastPumpAt: pump ? now : previous.lastPumpAt,
+      lastFlickAt: moved ? now : previous.lastFlickAt,
+      movementSamples: moved || coolingDown ? [] : [...recentMovement, sample],
     },
     speed: wristSpeed * 0.7 + elbowSpeed * 0.3,
     raised: true,
-    flick,
+    flickAt: moved ? now : null,
     pump,
     visible: true,
   };
@@ -146,9 +146,10 @@ export function analyzeDance(
   const config = { ...DEFAULT_DANCE_CONFIG, ...overrides };
   if (!landmarks?.length) {
     return {
-      state: { ...previous, timestamp },
+      state: { ...previous, timestamp, left: blankArm(previous.left), right: blankArm(previous.right) },
       metrics: { detected: false, score: 0, crowd: 0, burst: 0, motion: 0, raised: 0, armsUp: 0, flickPulse: 0, pumpPulse: 0 },
       gestures: { leftFlick: false, rightFlick: false, leftPump: false, rightPump: false },
+      flickAt: null,
     };
   }
 
@@ -159,7 +160,8 @@ export function analyzeDance(
   const shoulderWidth = shouldersVisible
     ? Math.max(0.08, Math.hypot(leftShoulder.x - rightShoulder.x, leftShoulder.y - rightShoulder.y))
     : 0.2;
-  const dt = previous.timestamp === null ? 0 : clamp((timestamp - previous.timestamp) / 1000, 0.016, 0.2);
+  const elapsedMs = previous.timestamp === null ? 0 : timestamp - previous.timestamp;
+  const dt = elapsedMs > 0 && elapsedMs <= MAX_POSE_GAP_MS ? Math.max(elapsedMs / 1000, 0.016) : 0;
   const left = armFrame("left", landmarks, previous.left, dt, shoulderWidth, timestamp, config);
   const right = armFrame("right", landmarks, previous.right, dt, shoulderWidth, timestamp, config);
   const validArms = Number(left.visible) + Number(right.visible);
@@ -170,7 +172,8 @@ export function analyzeDance(
   );
   const motion = previous.motion + (motionTarget - previous.motion) * config.smoothing;
   const raised = validArms ? (Number(left.raised) + Number(right.raised)) / validArms : 0;
-  const lastFlickAt = left.flick || right.flick ? timestamp : previous.lastFlickAt;
+  const flickAt = left.flickAt ?? right.flickAt;
+  const lastFlickAt = flickAt ?? previous.lastFlickAt;
   const lastPumpAt = left.pump || right.pump ? timestamp : previous.lastPumpAt;
   const flickPulse = clamp(1 - (timestamp - lastFlickAt) / config.pulseMs);
   const pumpPulse = clamp(1 - (timestamp - lastPumpAt) / config.pulseMs);
@@ -202,10 +205,11 @@ export function analyzeDance(
       pumpPulse,
     },
     gestures: {
-      leftFlick: left.flick,
-      rightFlick: right.flick,
+      leftFlick: left.flickAt !== null,
+      rightFlick: right.flickAt !== null,
       leftPump: left.pump,
       rightPump: right.pump,
     },
+    flickAt,
   };
 }

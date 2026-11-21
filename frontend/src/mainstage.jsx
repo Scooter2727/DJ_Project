@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { decodeMidi } from "./midi.js";
 import { MixAudioEngine } from "./audio.js";
+import { DEFAULT_DANCE_CONFIG } from "./crowd/danceScorer.js";
+import { usePoseTracker } from "./crowd/usePoseTracker.js";
 import "./mainstage.css";
 
 const TRACK_A = "/mixes/mix1/deck-a.mp3";
@@ -18,6 +20,7 @@ function MainstageApp() {
   const mountRef = useRef(null);
   const pageRef = useRef(null);
   const screenRef = useRef(null);
+  const cameraVideoRef = useRef(null);
   const sourceRef = useRef(null);
   const accessRef = useRef(null);
   const audioRef = useRef(null);
@@ -31,12 +34,21 @@ function MainstageApp() {
   const [message, setMessage] = useState("");
   const [selectedTrack, setSelectedTrack] = useState(TRACKS[0]);
   const [cameraOn, setCameraOn] = useState(false);
+  const camera = usePoseTracker({ videoRef: cameraVideoRef, config: DEFAULT_DANCE_CONFIG, maxFps: 24 });
+  const { start: startCamera, stop: stopCamera } = camera;
+  const cameraFailed = cameraOn && camera.status === "error" && !camera.cameraActive;
 
   const F = () => window.FLXHero;
 
   useEffect(() => {
     modeRef.current = mode;
   }, [mode]);
+
+  useEffect(() => {
+    if (!cameraOn) return undefined;
+    startCamera();
+    return stopCamera;
+  }, [cameraOn, startCamera, stopCamera]);
 
   useEffect(() => {
     const api = F();
@@ -115,6 +127,10 @@ function MainstageApp() {
       screen.destroy();
     };
   }, [mode]);
+
+  useEffect(() => {
+    screenRef.current?.setWebcam(cameraOn ? cameraVideoRef.current : null);
+  }, [mode, cameraOn]);
 
   useEffect(() => {
     accessRef.current = access;
@@ -217,35 +233,30 @@ function MainstageApp() {
     setConnected(false);
   }
 
-  async function toggleCamera() {
-    if (!screenRef.current) return;
-    if (cameraOn) {
-      screenRef.current.setWebcam(null);
-      setCameraOn(false);
-      return;
-    }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-      screenRef.current.setWebcam(stream);
-      setCameraOn(true);
-    } catch (error) {
-      setMessage("Camera unavailable: " + error.message);
-    }
+  function toggleCamera() {
+    if (cameraFailed) startCamera();
+    else setCameraOn(current => !current);
+  }
+
+  function openMainMenu() {
+    setCameraOn(false);
+    setMode("title");
   }
 
   return <main className="mainstage-shell">
+    <video className="mainstage-camera-source" ref={cameraVideoRef} muted playsInline aria-hidden="true" />
     <div className="mainstage-stage" ref={mountRef} />
     <div className="mainstage-controls" aria-label="MAINSTAGE controls">
-      <button className="mainstage-button" onClick={mode === "title" ? () => setMode("select") : () => setMode("title")}>
+      <button className="mainstage-button" onClick={mode === "title" ? () => setMode("select") : openMainMenu}>
         {mode === "title" ? "Start" : "Main menu"}
       </button>
       {mode === "game" && <button className="mainstage-button" onClick={() => setMode("select")}>Tracks</button>}
       <button className="mainstage-button" onClick={access ? disconnect : connect}>{access ? "Disconnect DDJ" : "Connect DDJ-FLX4"}</button>
-      {mode === "game" && <button className="mainstage-button" onClick={toggleCamera}>{cameraOn ? "Hide camera" : "Use camera"}</button>}
+      {mode === "game" && <button className="mainstage-button" onClick={toggleCamera}>{cameraFailed ? "Retry camera" : cameraOn ? "Hide camera" : "Use camera"}</button>}
       {ports.length > 1 && <select className="mainstage-select" value={selectedPort} onChange={event => setSelectedPort(event.target.value)} aria-label="MIDI input">
         {ports.map(input => <option key={input.id} value={input.id}>{input.name || "MIDI input"}</option>)}
       </select>}
-      <span className={connected ? "mainstage-status online" : "mainstage-status"}>{message || (connected ? "DDJ connected" : mode === "game" ? "Keyboard preview" : selectedTrack.name)}</span>
+      <span className={connected ? "mainstage-status online" : "mainstage-status"}>{(cameraOn && camera.status === "error" && camera.message) || message || (connected ? "DDJ connected" : mode === "game" ? "Keyboard preview" : selectedTrack.name)}</span>
     </div>
   </main>;
 }

@@ -326,6 +326,9 @@ button.text-button { padding: 5px; background: transparent; color: #aeb7c7; font
   right: 7px;
   bottom: 7px;
   left: 7px;
+  height: calc(100% - 14px);
+  transform-origin: bottom;
+  will-change: transform;
   border-radius: 999px;
   background: linear-gradient(180deg, #f7ffd6, #dbfa93 42%, #69e7a2);
   box-shadow: 0 0 18px #dbfa9377;
@@ -410,7 +413,6 @@ button.text-button { padding: 5px; background: transparent; color: #aeb7c7; font
 }
 .timer-bar.good { background: #14515c; }
 .timer-bar.perfect { border-color: #dbfa93; background: #3d5a16; color: #f7ffd6; }
-.timer-bar.late { border-color: #ff8f8f; background: #5a2418; color: #ffd0c4; }
 .beat-call {
   position: absolute;
   top: 6px;
@@ -422,7 +424,12 @@ button.text-button { padding: 5px; background: transparent; color: #aeb7c7; font
 }
 .beat-call.perfect { color: #dbfa93; }
 .beat-call.good { color: #6de8fb; }
-.beat-call.miss, .beat-call.offbeat { color: #ff8f8f; }
+.beat-call.miss { color: #ff8f8f; }
+.beat-call:is(.perfect, .good, .miss) span { animation: beat-feedback 120ms ease-out; }
+@keyframes beat-feedback {
+  from { opacity: .55; }
+  to { opacity: 1; }
+}
 .bpm-field {
   position: absolute;
   right: 12px;
@@ -445,5 +452,6 @@ button.text-button { padding: 5px; background: transparent; color: #aeb7c7; font
 
 @media (prefers-reduced-motion: reduce) {
   .crowd-people i, .moving .crowd-people i, .hype .crowd-people i, .wild .crowd-people i { animation: none; }
+  .beat-call:is(.perfect, .good, .miss) span { animation: none; }
   .energy-track i, .crowd-score > div i, .lab-crowd > div i, .dance-bar i { transition: none; }
 }

@@ -2,29 +2,23 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createArmFlickState, detectArmFlick } from "./armFlick.js";
 
-test("a still or lowered arm does not create a flick", () => {
-  let state = createArmFlickState();
-  for (const level of [0, 0.03, 0.06]) {
-    const result = detectArmFlick(state, level, 100);
-    state = result.state;
-    assert.equal(result.flick, false);
-  }
+test("ordinary arm motion and pumps are never accepted as flicks", () => {
+  const result = detectArmFlick(createArmFlickState(), { leftPump: true }, 100);
+  assert.equal(result.flick, false);
 });
 
-test("a smaller above-shoulder snap still counts as a flick", () => {
-  const result = detectArmFlick(createArmFlickState(), 0.12, 100);
-  assert.equal(result.flick, true);
-});
-
-test("one above-shoulder burst creates one flick until the arm settles", () => {
-  const first = detectArmFlick(createArmFlickState(), 0.7, 100);
-  const held = detectArmFlick(first.state, 0.8, 220);
-  const tooSoon = detectArmFlick({ ...held.state, ready: false }, 0.05, 300);
-  const again = detectArmFlick(held.state, 0.05, 500);
-  const next = detectArmFlick(again.state, 0.7, 560);
+test("a two-arm flick is accepted once even if the frame is repeated", () => {
+  const gestures = { leftFlick: true, rightFlick: true };
+  const first = detectArmFlick(createArmFlickState(), gestures, 100);
+  const repeated = detectArmFlick(first.state, gestures, 100);
   assert.equal(first.flick, true);
-  assert.equal(held.flick, false);
-  assert.equal(tooSoon.flick, false);
-  assert.equal(again.flick, false);
+  assert.equal(repeated.flick, false);
+});
+
+test("a slightly staggered second arm is ignored but the next distinct flick is accepted", () => {
+  const first = detectArmFlick(createArmFlickState(), { leftFlick: true }, 100);
+  const staggered = detectArmFlick(first.state, { rightFlick: true }, 230);
+  const next = detectArmFlick(staggered.state, { rightFlick: true }, 270);
+  assert.equal(staggered.flick, false);
   assert.equal(next.flick, true);
 });

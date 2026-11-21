@@ -1,8 +1,9 @@
-export const BEAT_WINDOWS = { perfectMs: 200, goodMs: 420 };
-export const BEAT_DELTAS = { perfect: 10, good: 5, miss: 0, offbeat: -3 };
+export const BEAT_WINDOWS = { perfectMs: 260, goodMs: 480 };
+const SKIPS_BEFORE_CROWD_DROP = 2;
+const FRAME_PROCESSING_GRACE_MS = 200;
 
 export function createBeatState() {
-  return { resolved: new Map() };
+  return { resolved: new Set() };
 }
 
 export function noteTimes(songTimeMs, loopMs, cues, horizonMs) {
@@ -16,59 +17,62 @@ export function noteTimes(songTimeMs, loopMs, cues, horizonMs) {
   return times;
 }
 
-function closestPending(state, songTimeMs, cues, loopMs, windowMs) {
-  let best = null;
-  let bestDistance = Infinity;
-  for (const time of noteTimes(songTimeMs, loopMs, cues, windowMs)) {
-    if (state.resolved.has(time)) continue;
-    const distance = Math.abs(time - songTimeMs);
-    if (distance <= windowMs && distance < bestDistance) {
-      best = time;
-      bestDistance = distance;
-    }
-  }
-  return best === null ? null : { time: best, distance: bestDistance };
+function cueZone(remainingMs, windows) {
+  if (remainingMs > windows.goodMs) return "wait";
+  if (remainingMs > windows.perfectMs) return "good";
+  if (remainingMs >= -windows.perfectMs) return "perfect";
+  return "miss";
 }
 
 export function judgeArmFlick(state, songTimeMs, cues, loopMs, windows = BEAT_WINDOWS) {
-  const pending = closestPending(state, songTimeMs, cues, loopMs, windows.goodMs);
-  if (!pending) return { state, judgment: "offbeat", noteTime: null };
-  const judgment = pending.distance <= windows.perfectMs ? "perfect" : "good";
-  const resolved = new Map(state.resolved);
-  resolved.set(pending.time, judgment);
-  return { state: { resolved }, judgment, noteTime: pending.time };
-}
-
-export function collectMisses(state, songTimeMs, cues, loopMs, windows = BEAT_WINDOWS) {
-  const resolved = new Map(state.resolved);
-  const missed = [];
-  for (const time of noteTimes(songTimeMs, loopMs, cues, loopMs)) {
-    if (resolved.has(time) || time > songTimeMs - windows.goodMs || time < 0) continue;
-    resolved.set(time, "miss");
-    missed.push(time);
+  if (songTimeMs < -windows.goodMs) return { state, judgment: null, noteTime: null };
+  let noteTime = null;
+  let bestDistance = Infinity;
+  let alreadyScored = false;
+  for (const time of noteTimes(songTimeMs, loopMs, cues, windows.goodMs)) {
+    const remainingMs = time - songTimeMs;
+    const zone = cueZone(remainingMs, windows);
+    if (zone !== "perfect" && zone !== "good") continue;
+    if (state.resolved.has(time)) {
+      alreadyScored = true;
+      continue;
+    }
+    const distance = Math.abs(remainingMs);
+    if (distance < bestDistance) {
+      noteTime = time;
+      bestDistance = distance;
+    }
   }
-  return { state: { resolved }, missed };
+  if (noteTime === null) return { state, judgment: alreadyScored ? null : "miss", noteTime: null };
+  const resolved = new Set([...state.resolved].filter(time => time >= songTimeMs - windows.perfectMs));
+  resolved.add(noteTime);
+  return { state: { resolved }, judgment: cueZone(noteTime - songTimeMs, windows), noteTime };
 }
 
-export function visibleCues(songTimeMs, cues, loopMs, leadMs) {
-  return noteTimes(songTimeMs, loopMs, cues, leadMs)
-    .filter(time => time >= songTimeMs - BEAT_WINDOWS.goodMs && time <= songTimeMs + leadMs)
+export function skippedCueDeadline(lastScoredCue, cues, loopMs) {
+  const nextCues = noteTimes(lastScoredCue ?? 0, loopMs, cues, loopMs)
+    .filter(time => lastScoredCue === null || time > lastScoredCue);
+  const skippedCue = nextCues[SKIPS_BEFORE_CROWD_DROP - 1];
+  return skippedCue === undefined ? Infinity : skippedCue + BEAT_WINDOWS.perfectMs + FRAME_PROCESSING_GRACE_MS;
+}
+
+export function visibleCues(songTimeMs, cues, loopMs, leadMs, windows = BEAT_WINDOWS) {
+  return noteTimes(songTimeMs, loopMs, cues, Math.max(leadMs, windows.perfectMs))
+    .filter(time => time >= songTimeMs - windows.perfectMs && time <= songTimeMs + leadMs)
     .map(time => ({ time, progress: 1 - (time - songTimeMs) / leadMs }));
 }
 
 export const TIMER_TRACK = { start: 4, span: 82 };
 
-export function timerWindow(windowMs, leadMs, track = TIMER_TRACK) {
-  const half = (windowMs / leadMs) * track.span;
+export function timerWindow(startMs, endMs, leadMs, track = TIMER_TRACK) {
   const hit = track.start + track.span;
-  return { left: hit - half, width: half * 2 };
+  return { left: hit - (startMs / leadMs) * track.span, width: ((startMs - endMs) / leadMs) * track.span };
 }
 
 export function timerBars(songTimeMs, cues, loopMs, leadMs, windows = BEAT_WINDOWS, track = TIMER_TRACK) {
-  return visibleCues(songTimeMs, cues, loopMs, leadMs).map(cue => {
+  return visibleCues(songTimeMs, cues, loopMs, leadMs, windows).map(cue => {
     const remainingMs = cue.time - songTimeMs;
-    const distance = Math.abs(remainingMs);
-    const zone = distance <= windows.perfectMs ? "perfect" : distance <= windows.goodMs ? "good" : remainingMs > 0 ? "wait" : "late";
+    const zone = cueZone(remainingMs, windows);
     return { ...cue, remainingMs, zone, left: track.start + cue.progress * track.span };
   });
 }
