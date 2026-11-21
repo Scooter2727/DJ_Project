@@ -24,18 +24,22 @@ function Knob({ label, value }) {
 
 function Deck({ side, values }) {
   const read = control => values[side + "." + control];
-  return <section className={"deck " + side} aria-label={"Deck " + side.toUpperCase()}>
-    <div className="deck-heading"><h2>Deck {side.toUpperCase()}</h2><span className={read("play") ? "lit" : ""}>{read("play") ? "PLAY ACTIVE" : "PLAY IDLE"}</span></div>
+  const transport = [["cue", "CUE"], ["play", "▶ PLAY"]];
+  return <section className={"deck " + side} aria-label="Deck controls">
+    <div className="deck-heading">
+      <div className="loop-buttons" aria-label="Loop controls">
+        <span className={"loop-button " + (read("loopIn") ? "lit" : "")} aria-label="Loop in">IN</span>
+        <span className={"loop-button " + (read("loopOut") ? "lit" : "")} aria-label="Loop out">OUT</span>
+      </div>
+      <span className={"sync-button " + (read("sync") ? "lit" : "")} aria-label="Sync">SYNC</span>
+    </div>
     <div className="deck-body">
       <div className="platter" style={{ "--angle": (read("jog") ?? 0) + "deg" }}>
-        <div className="disc"><div className="disc-label"><strong>{side.toUpperCase()}</strong></div></div>
+        <div className="disc"><div className="disc-label" /></div>
       </div>
-      <Meter label="Tempo" value={read("tempo")} vertical />
     </div>
-    <div className="transport"><span className={read("cue") ? "lit" : ""}>CUE</span><span className={read("play") ? "lit" : ""}>▶ PLAY</span></div>
-    <div className="pad-heading">Hot cue pads</div>
-    <div className="pads">{Array.from({ length: 8 }, (_, i) =>
-      <span className={read("pad" + (i + 1)) ? "lit" : ""} key={i}>{i + 1}</span>
+    <div className="transport">{transport.map(([control, label]) =>
+      <span className={read(control) ? "lit" : ""} key={control}>{label}</span>
     )}</div>
   </section>;
 }
@@ -47,7 +51,7 @@ function App() {
   const [message, setMessage] = useState("");
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
-  const [frame, setFrame] = useState({ values: {}, count: 0, raw: "—" });
+  const [frame, setFrame] = useState({ values: {} });
   const live = useRef(frame);
 
   useEffect(() => {
@@ -66,7 +70,7 @@ function App() {
 
   const port = ports.find(candidate => candidate.id === selected);
   useEffect(() => {
-    live.current = { values: {}, count: 0, raw: "—" };
+    live.current = { values: {} };
     setFrame(live.current);
     setConnected(false);
     setMessage("");
@@ -75,11 +79,9 @@ function App() {
     let redraw = null;
     function receive(event) {
       const bytes = Array.from(event.data);
-      const { values, count } = live.current;
+      const { values } = live.current;
       live.current = {
         values: { ...values, ...decodeMidi(bytes, values) },
-        count: count + 1,
-        raw: bytes.map(byte => byte.toString(16).padStart(2, "0").toUpperCase()).join(" ")
       };
       if (redraw === null) redraw = requestAnimationFrame(() => {
         redraw = null;
@@ -119,40 +121,31 @@ function App() {
     setSelected("");
   }
 
-  const { values, count, raw } = frame;
+  const { values } = frame;
   const status = message || (connected ? "Listening to " + (port?.name || "MIDI input")
     : port ? "Opening MIDI input…" : access ? "No MIDI input found. Check the USB data cable." : "Plug in your FLX4 to get started.");
 
   return <main className="console">
-    <header className="top">
-      <div className="brand"><div className="brand-mark" aria-hidden="true"><i /><i /><i /></div><div><h1>Deck Relay</h1><p>DDJ-FLX4 live console</p></div></div>
-      <div className="connection">
+    <div className="connection">
         {ports.length > 1 && <select aria-label="MIDI input" value={selected} onChange={event => setSelected(event.target.value)}>
           {ports.map(input => <option key={input.id} value={input.id}>{input.name || "MIDI input"}</option>)}
         </select>}
         <button onClick={access ? disconnect : connect} disabled={connecting}>{connecting ? "Requesting MIDI…" : access ? "Disconnect" : "Connect DDJ-FLX4"}</button>
-      </div>
-    </header>
-    <div className="status" role="status"><span className={connected ? "online" : ""} />{status}</div>
+    </div>
     <div className="surface">
       <Deck side="a" values={values} />
       <section className="mixer" aria-label="Mixer">
-        <h2>Mixer</h2>
         <div className="channels">
           {["a", "b"].map(side => <div className={"channel " + side} key={side}>
-            <h3>CH {side.toUpperCase()}</h3>
             {pairs.map(([key, label]) => <Knob key={key} label={label} value={values[side + "." + key]} />)}
-            <Meter label="Level" value={values[side + ".volume"]} />
           </div>)}
         </div>
         <div className="mix-faders">
           <Meter label="Crossfader" value={values["mixer.crossfade"]} />
-          <Meter label="Master level" value={values["mixer.master"]} />
         </div>
       </section>
       <Deck side="b" values={values} />
     </div>
-    <footer><span>MIDI EVENTS <strong>{count}</strong></span><span>LAST MESSAGE <code>{raw}</code></span></footer>
   </main>;
 }
 

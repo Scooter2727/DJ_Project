@@ -4,6 +4,7 @@ const deckKnobs = {
 };
 const mixerKnobs = { 0x08: "master", 0x1f: "crossfade" };
 const cfxKnobs = { 0x17: "a.cfx", 0x18: "b.cfx" };
+const transportButtons = { 0x10: "loopIn", 0x11: "loopOut", 0x4d: "loop4", 0x58: "sync" };
 
 export function decodeMidi([status, id, value], current) {
   const kind = status & 0xf0;
@@ -35,6 +36,9 @@ export function decodeMidi([status, id, value], current) {
 
   if (kind === 0x90 || kind === 0x80) {
     const pressed = kind === 0x90 && value > 0;
+    if (channel < 2 && transportButtons[id]) {
+      return { [deck + "." + transportButtons[id]]: pressed };
+    }
     if ((channel === 7 || channel === 9) && id < 8) {
       return { [(channel === 7 ? "a" : "b") + ".pad" + (id + 1)]: pressed };
     }
