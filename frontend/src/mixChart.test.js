@@ -14,13 +14,61 @@ test("the first turn and forecast are anchored to the calibrated reference recor
   const first = chart.notes[0];
   assert.deepEqual([first.channel, first.row, first.dir], [1, "LOW", "ccw"]);
   assert.ok(Math.abs(first.time - 7.1362) < 0.001);
-  assert.equal(chart.tracesAt(first.time - 4.01)["1:LOW"], undefined);
+  assert.ok(Math.abs(first.degrees - first.startPosition * 180) < 0.001);
+  assert.deepEqual(chart.tracesAt(first.time - 4.01)["1:LOW"].changes, []);
   const trace = chart.tracesAt(first.time - 3)["1:LOW"];
-  assert.equal(trace[0], 0);
-  assert.ok(trace.at(-1) < 0);
-  assert.equal(trace.at(-1), (chart.valuesAt(first.time + 1)["a.low"] - chart.valuesAt(first.time - 3)["a.low"]) / 16383);
+  assert.equal(trace.position, chart.valuesAt(first.time - 3)["a.low"] / 16383);
+  assert.ok(Math.abs(trace.changes[0].fraction - 0.75) < 1e-10);
+  assert.equal(trace.changes.at(-1).position, chart.valuesAt(first.time + 1)["a.low"] / 16383);
+  assert.deepEqual(chart.tracesAt(10)["1:LOW"], { position: 0, changes: [] });
   assert.ok(chart.notes.every((n, i) => n.time < chart.duration && (!i || n.time >= chart.notes[i - 1].time)));
   assert.equal(chart.valuesAt(54)["mixer.crossfade"], 0);
+});
+
+test("each forecast matches the recording at the playhead and throughout the four-second window", () => {
+  for (const selection of ["mix1", "heroes", "levels"]) {
+    const data = buildMixChart(recording, manifest, selection);
+    for (let time = 0; time < data.duration; time += 0.673) {
+      for (const [lane, trace] of Object.entries(data.tracesAt(time))) {
+        const [channel, row] = lane.split(":");
+        const control = (channel === "1" ? "a." : "b.") + (row === "HI" ? "high" : row.toLowerCase());
+        for (const ahead of [0, 0.019, 0.111, 1.59, 4]) {
+          const latest = trace.changes.findLast(change => change.fraction <= ahead / 4 + 1e-12);
+          const expected = data.valuesAt(time + ahead)[control] / 16383;
+          assert.equal(latest?.position ?? trace.position, expected, selection + " " + lane + " at " + (time + ahead));
+        }
+      }
+    }
+  }
+});
+
+test("the guide drops vertically onto the knob pointer throughout its upper semicircle", () => {
+  const window = {};
+  runInNewContext(asset("mainstage/components/bundle.js"), { window });
+  const { makeLayout, NoteLanes, Deck } = window.FLXHero;
+  const layout = makeLayout({ rows: ["LOW"] }), lane = layout.lanes[1].LOW;
+  const paths = [];
+  let path;
+  const ctx = { save() {}, restore() {}, fill() {}, stroke() {}, fillText() {}, closePath() {},
+    beginPath() { path = []; paths.push(path); },
+    moveTo(x, y) { path.push([x, y]); }, lineTo(x, y) { path.push([x, y]); } };
+  for (const position of [0, 0.25, 0.5, 0.75, 1]) {
+    paths.length = 0;
+    const nextPosition = 1 - position;
+    const traces = { "1:LOW": { position, changes: [{ fraction: 0.5, position: nextPosition }] } };
+    NoteLanes.drawGuides(ctx, layout, {}, traces);
+    const start = paths[0][0];
+    const angle = (position - 0.5) * Math.PI;
+    assert.equal(start[0], lane.x + Math.sin(angle) * lane.pointerRadius);
+    assert.deepEqual(paths[0].at(-1), [lane.x + Math.sin(-angle) * lane.pointerRadius, layout.spawnY]);
+    const knobs = { "1:LOW": { angle } };
+    assert.equal(paths[0][1][0], start[0]);
+    Deck.drawOverlay(ctx, layout, knobs);
+    const pointer = paths.find(p => p.length === 2 && p[0][0] === lane.x && p[0][1] === lane.hitY);
+    assert.deepEqual(start, pointer[1]);
+    if (position === 0 || position === 1) assert.equal(pointer[1][1], lane.hitY);
+    else assert.ok(pointer[1][1] < lane.hitY);
+  }
 });
 
 test("signals drop on ten persistent guides that end at their projected knobs", () => {
@@ -76,7 +124,7 @@ test("live cues follow the first deck media position through pauses and manual D
   session.input("a", true);
   turn({ channel: 1, row: "LOW", dir: "ccw" });
   assert.equal(judgments[0].judgment, "perfect");
-  for (const [time, cue] of [[19.934, "3"], [20.934, "2"], [21.934, "1"], [22.933, "SPIN RIGHT"]]) {
+  for (const [time, cue] of [[20.034, null], [20.284, "3"], [21.284, "2"], [22.284, "1"], [23.283, "SPIN RIGHT"]]) {
     players.a.currentTime = time;
     assert.equal(frame().entryCue, cue);
     assert.equal(players.b.paused, true);
@@ -88,16 +136,66 @@ test("live cues follow the first deck media position through pauses and manual D
   assert.equal(frame().score, 0);
 });
 
+test("wheel frames follow each deck independently and freeze when paused", async () => {
+  const { players, session, frame } = setup();
+  session.input("a", true);
+  await Promise.resolve();
+  players.a.currentTime = 1.25;
+  let game = frame();
+  assert.deepEqual(game.wheels.a, { time: 1.25, playing: true });
+  assert.deepEqual(game.wheels.b, { time: 0, playing: false });
+  players.a.currentTime = chart.entry + 0.75;
+  session.input("b", true);
+  players.b.currentTime = 0.75;
+  game = frame();
+  assert.deepEqual(game.wheels.b, { time: 0.75, playing: true });
+  session.input("b", false);
+  game = frame();
+  assert.deepEqual(game.wheels.a, { time: chart.entry + 0.75, playing: true });
+  assert.deepEqual(game.wheels.b, { time: 0.75, playing: false });
+});
+
+test("right deck rejects early spins, arms during countdown, and stays aligned after entry", async () => {
+  const { players, session, frame, starts } = setup();
+  session.input("a", true);
+  await Promise.resolve();
+  players.a.currentTime = chart.entry - 2.26;
+  session.input("b", true);
+  players.a.currentTime = chart.entry + 1;
+  frame();
+  assert.deepEqual(starts, ["a"]);
+  players.a.currentTime = chart.entry - 2.25;
+  session.input("b", true);
+  frame();
+  assert.equal(players.b.paused, true);
+  players.a.currentTime = chart.entry + 0.2;
+  frame();
+  assert.deepEqual(starts, ["a"]);
+  players.a.currentTime = chart.entry + 0.75;
+  frame();
+  assert.deepEqual(starts, ["a", "b"]);
+  assert.equal(players.b.currentTime, 0.75);
+  players.a.currentTime = chart.entry + 5;
+  frame();
+  assert.equal(players.b.currentTime, 5);
+  session.input("b", false);
+  await Promise.resolve();
+  await Promise.resolve();
+  players.a.currentTime = chart.entry + 7;
+  session.input("b", true);
+  assert.equal(players.b.currentTime, 7);
+});
+
 test("preview handles a skipped frame at the entry, replays the recorded fade, and ends once", () => {
   const { players, session, frame, starts, mixes, states } = setup();
   session.preview();
-  players.a.currentTime = chart.entry - 0.01;
+  players.a.currentTime = chart.entry + 0.74;
   frame();
   assert.deepEqual(starts, ["a"]);
-  players.a.currentTime = chart.entry + 0.4;
+  players.a.currentTime = chart.entry + 0.9;
   frame();
   assert.deepEqual(starts, ["a", "b"]);
-  assert.ok(Math.abs(players.b.currentTime - 0.4) < 0.00001);
+  assert.ok(Math.abs(players.b.currentTime - 0.9) < 0.00001);
   players.a.currentTime = 54;
   frame();
   assert.equal(mixes.at(-1)["mixer.crossfade"], 0);

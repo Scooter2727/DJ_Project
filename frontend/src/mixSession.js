@@ -1,12 +1,16 @@
 import { createMixSource, ROW_BY_CONTROL } from "./mixChart.js";
 
 const silence = { bands: Array(16).fill(0), kick: 0, bass: 0, hats: 0, energy: 0 };
+const RIGHT_CUE_DELAY_SECONDS = 0.75;
 
 export function createMixSession(chart, selection, bpm, { getAudio, liveValues, onState, onError }) {
   const master = selection === "levels" ? "b" : "a";
+  const rightCueTime = chart.entry + RIGHT_CUE_DELAY_SECONDS;
   const initialValues = chart.valuesAt(0);
   let audio, screen, mode = "ready", lastValues, entryStarted = false;
+  let crossfade = initialValues["mixer.crossfade"] ?? 8191;
   let resumeSecond = false, resumePreview = false;
+  let rightArmed = false;
   const pending = new Map();
 
   function state(next) {
@@ -17,18 +21,23 @@ export function createMixSession(chart, selection, bpm, { getAudio, liveValues, 
     const player = audio?.players[master];
     const active = mode === "live" || mode === "demo";
     const time = mode === "finished" ? chart.duration : active ? player?.currentTime || 0 : 0;
-    const remaining = chart.entry - time;
+    const wheels = audio ? {
+      a: { time: audio.players.a.currentTime, playing: !audio.players.a.paused && !audio.players.a.ended },
+      b: { time: audio.players.b.currentTime, playing: !audio.players.b.paused && !audio.players.b.ended },
+    } : { a: { time: 0, playing: false }, b: { time: 0, playing: false } };
+    const remaining = rightCueTime - time;
     let entryCue = null;
     if (active && selection === "mix1" && remaining <= 3 && remaining > -1.2) {
       entryCue = remaining > 0 ? String(Math.ceil(remaining)) : "SPIN RIGHT";
     }
     return { time, playing: active && !!player && !player.paused && !player.ended && player.readyState >= 2,
-      demo: mode === "demo", entryCue };
+      demo: mode === "demo", entryCue, wheels, crossfade };
   }
   function stop(next = "ready") {
     pending.clear();
     audio?.stop();
     entryStarted = resumeSecond = resumePreview = false;
+    rightArmed = false;
     lastValues = undefined;
     if (next === "ready") source.reset();
     state(next);
@@ -53,6 +62,7 @@ export function createMixSession(chart, selection, bpm, { getAudio, liveValues, 
     try {
       audio = getAudio();
       const values = demo ? initialValues : { ...initialValues, ...liveValues() };
+      crossfade = values["mixer.crossfade"] ?? crossfade;
       mirrorKnobs(values);
       state(demo ? "demo" : "live");
       audio.update(values);
@@ -74,6 +84,14 @@ export function createMixSession(chart, selection, bpm, { getAudio, liveValues, 
     lastValues = values;
   }
   function setDeckPlayback(deck, playing) {
+    if (selection === "mix1" && deck === "b" && mode === "live") {
+      if (!playing) { rightArmed = false; pause("b"); return; }
+      const time = audio.players.a.currentTime;
+      if (audio.players.a.paused || time < rightCueTime - 3) return;
+      rightArmed = true;
+      if (time >= rightCueTime && audio.players.b.paused) play("b", time - chart.entry);
+      return;
+    }
     if (!playing) {
       pause(deck);
       if (deck === master && selection === "mix1") {
@@ -91,17 +109,27 @@ export function createMixSession(chart, selection, bpm, { getAudio, liveValues, 
     frame.audio = playing ? audio.audioFrame() : silence;
     if (mode !== "live" && mode !== "demo") return;
     if (time >= chart.duration || audio.players[master].ended) { stop("finished"); return; }
-    if (!demo) return;
+    if (!demo) {
+      if (selection === "mix1" && rightArmed && playing && time >= rightCueTime) {
+        const second = audio.players.b, elapsed = time - chart.entry;
+        if (second.paused && !second.ended) play("b", elapsed);
+        else if (!second.paused && !second.seeking && Math.abs(second.currentTime - elapsed) > 0.12) {
+          second.currentTime = elapsed;
+        }
+      }
+      return;
+    }
     if (!playing) {
       if (entryStarted && !audio.players.b.paused) { pause("b"); resumePreview = true; }
       return;
     }
     const values = chart.valuesAt(time);
     if (values !== lastValues) {
+      crossfade = values["mixer.crossfade"] ?? crossfade;
       audio.update(values);
       mirrorKnobs(values);
     }
-    if (selection === "mix1" && time >= chart.entry) {
+    if (selection === "mix1" && time >= rightCueTime) {
       const elapsed = time - chart.entry, second = audio.players.b;
       if (!entryStarted || resumePreview) {
         entryStarted = true;
@@ -129,7 +157,11 @@ export function createMixSession(chart, selection, bpm, { getAudio, liveValues, 
       setDeckPlayback(deck, playing);
     },
     update(values) {
-      if (mode === "live") audio.update({ ...initialValues, ...values });
+      if (mode === "live") {
+        const next = { ...initialValues, ...values };
+        crossfade = next["mixer.crossfade"] ?? crossfade;
+        audio.update(next);
+      }
     },
     get demo() { return mode === "demo"; },
     destroy() { stop(); source.destroy(); }

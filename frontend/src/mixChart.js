@@ -2,7 +2,6 @@ export const ROW_BY_CONTROL = { trim: "TRIM", high: "HI", mid: "MID", low: "LOW"
 const MAX = 16383;
 const DEAD_BAND = 256;
 const APPROACH = 4;
-const TRACE_STEPS = 48;
 const clampMidi = value => Math.max(0, Math.min(MAX, value));
 
 function indexAt(points, t) {
@@ -14,16 +13,23 @@ function indexAt(points, t) {
   return low;
 }
 
-// A 14-bit knob update often arrives as two messages a fraction of a millisecond apart.
-// Keep the first timestamp and the settled value so the low bits don't create false turns.
-function controlChanges(events, key) {
+function recordedPositions(events, key) {
   const changes = [];
-  let previous;
   for (const { t, values } of events) {
     if (!Number.isFinite(values?.[key])) continue;
     const value = clampMidi(values[key]);
-    if (value === previous) continue;
-    previous = value;
+    const last = changes.at(-1);
+    if (last?.t === t) last.value = value;
+    else if (value !== last?.value) changes.push({ t, value });
+  }
+  return changes;
+}
+
+// Group the two bytes of a MIDI update when identifying gestures for scoring.
+// The visual guide uses the original timestamps, just like audio playback.
+function controlChanges(points) {
+  const changes = [];
+  for (const { t, value } of points) {
     const last = changes.at(-1);
     if (last && t - last.t <= 4) last.value = value;
     else changes.push({ t, value });
@@ -71,14 +77,15 @@ export function buildMixChart(recording, manifest, selection = "mix1") {
   for (const [control, row] of Object.entries(ROW_BY_CONTROL)) {
     for (const [side, channel] of [["a", 1], ["b", 2]]) {
       if ((selection === "heroes" && side === "b") || (selection === "levels" && side === "a")) continue;
-      const changes = controlChanges(events, side + "." + control);
-      if (changes.length) curves[channel + ":" + row] = changes;
-      gestures(changes, (first, base, peak) => {
+      const positions = recordedPositions(events, side + "." + control);
+      if (!positions.length) continue;
+      curves[channel + ":" + row] = positions;
+      gestures(controlChanges(positions), (first, base, peak) => {
         const time = songTime(first.t);
         if (time < 0) return;
         const delta = peak.value - base.value;
         notes.push({ channel, row, time, dir: delta > 0 ? "cw" : "ccw",
-          degrees: Math.abs(delta) / MAX * 298, startPosition: base.value / MAX });
+          degrees: Math.abs(delta) / MAX * 180, startPosition: base.value / MAX });
       });
     }
   }
@@ -86,17 +93,14 @@ export function buildMixChart(recording, manifest, selection = "mix1") {
   return { notes, entry, duration: songTime(recording.durationMs), valuesAt(time) {
     return events[indexAt(events, (time - offset) * 1000)].values;
   }, tracesAt(time) {
-    const from = (time - offset) * 1000, traces = {};
+    const from = (time - offset) * 1000, windowMs = APPROACH * 1000, traces = {};
     for (const [lane, points] of Object.entries(curves)) {
-      let i = indexAt(points, from);
-      if (!points[i + 1] || points[i + 1].t > from + APPROACH * 1000) continue;
-      const origin = points[i].value, trace = [0];
-      for (let step = 1; step <= TRACE_STEPS; step++) {
-        const at = from + step / TRACE_STEPS * APPROACH * 1000;
-        while (points[i + 1] && points[i + 1].t <= at) i++;
-        trace.push((points[i].value - origin) / MAX);
+      const current = from < points[0].t ? -1 : indexAt(points, from);
+      const changes = [];
+      for (let i = current + 1; i < points.length && points[i].t <= from + windowMs; i++) {
+        changes.push({ fraction: (points[i].t - from) / windowMs, position: points[i].value / MAX });
       }
-      traces[lane] = trace;
+      traces[lane] = { position: current < 0 ? 0.5 : points[current].value / MAX, changes };
     }
     return traces;
   } };
@@ -148,7 +152,8 @@ export function createMixSource(chart, bpm, readTransport, onFrame) {
       const visible = notes.filter(n => n.time <= time + APPROACH && (n.state === "pending" || time - n.judgedAt < 0.35));
       return { time, bpm, approach: APPROACH, notes: visible, score, combo,
         multiplier: Math.min(4, 1 + Math.floor(combo / 10)), mode: demo ? "demo" : "live",
-        audio: transport.audio, entryCue: transport.entryCue, recordedMix: true, traces: chart.tracesAt(time) };
+        audio: transport.audio, entryCue: transport.entryCue, recordedMix: true, traces: chart.tracesAt(time),
+        wheels: transport.wheels, crossfade: transport.crossfade };
     },
     destroy() { unsubscribe?.(); }
   };

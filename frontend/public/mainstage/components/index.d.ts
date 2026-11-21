@@ -6,7 +6,14 @@ export type Judgment = 'perfect' | 'good' | 'miss';
 
 export interface LiveNote { id: string | number; channel: Channel; row: Row; dir: Dir; time: number; state: 'pending' | 'hit' | 'miss'; judgedAt?: number; degrees?: number; startPosition?: number; }
 export interface AudioFrame { kick: number; bass: number; hats: number; energy: number; bands?: number[]; level?: [number, number]; }
-export interface GameFrame { time: number; bpm: number; approach?: number; notes: LiveNote[]; score: number; combo: number; multiplier?: number; energy?: number; mode?: 'live' | 'keys' | 'demo'; audio?: AudioFrame; traces?: Record<string, number[]>; recordedMix?: boolean; entryCue?: string | null; }
+export interface KnobTrace {
+  /** Recorded knob position now, from full counterclockwise (0) to full clockwise (1). */
+  position: number;
+  /** Ordered MIDI changes, timed as fractions of the approach window. Hold between changes. */
+  changes: { fraction: number; position: number }[];
+}
+export interface WheelFrame { time: number; playing: boolean; }
+export interface GameFrame { time: number; bpm: number; approach?: number; notes: LiveNote[]; score: number; combo: number; multiplier?: number; energy?: number; mode?: 'live' | 'keys' | 'demo'; audio?: AudioFrame; traces?: Record<string, KnobTrace | number[]>; recordedMix?: boolean; entryCue?: string | null; wheels?: { a: WheelFrame; b: WheelFrame }; crossfade?: number; }
 export interface GameSource { frame(dt: number): GameFrame; attach?(screen: Screen): void; setRows?(rows: Row[]): void; }
 
 export interface KnobEvent { channel: Channel; row: Row; position?: number; delta?: number; }

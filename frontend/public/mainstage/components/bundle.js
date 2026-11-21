@@ -7,7 +7,7 @@
   var LW = 640, LH = 360;           // retro layer resolution (dithered, upscaled)
   var LS = LW / W;
   var ROWS = ['TRIM', 'HI', 'MID', 'LOW', 'CFX'];
-  var KNOB_SWEEP = 2.6;             // so 30 degrees = 30/298 of the full sweep             // radians either side of 12 o'clock (about 300 degrees total)
+  var KNOB_SWEEP = Math.PI / 2; // radians to either side of twelve o'clock
   var C = {
     void: '#0b0814', wall: '#1a1028', plum: '#3a2160', violet: '#8b4dff', magenta: '#ff3d9a',
     cyan: '#34e0ff', amber: '#ffb330', laser: '#6bff9e', cream: '#f6ecd6', creamDim: '#c9bda4', ink: '#120d1c',
@@ -90,25 +90,45 @@
     ROWS.forEach(function (row, index) {
       [1, 2].forEach(function (ch) {
         var outward = ch === 1 ? -1 : 1;
-        var x = 800 + outward * (76 + index * 60);
+        var x = 800 + outward * (42 + index * 78);
         flat.knobX[ch][row] = x;
         var centre = P(x, flatRowY[row]);
-        lanes[ch][row] = { x: centre.x, hitY: centre.y - knobH * centre.s };
+        lanes[ch][row] = { x: centre.x, hitY: centre.y - knobH * centre.s,
+          flatX: x, flatY: flatRowY[row], pointerRadius: flat.knobR * centre.s };
       });
     });
     return {
       W: W, H: H, rows: rows, flat: flat, P: P, unY: unY, cam: cam, knobH: knobH,
-      lanes: lanes, spawnY: -24, laneWidth: 40, noteR: 19, markerR: 24
+      lanes: lanes, spawnY: -24, laneWidth: 64, noteR: 19, markerR: 24
     };
   }
-  function noteY(L, lane, timeUntilHit, approach) {
-    return lerp(lane.hitY, L.spawnY, clamp(timeUntilHit / approach, 0, 1));
+  function isPositionTrace(trace) { return trace && Array.isArray(trace.changes); }
+  function guideBottom(L, lane, trace) {
+    return isPositionTrace(trace) ? knobTip(L, lane, knobAngle(trace.position)).y : lane.hitY;
   }
-  function traceOffset(trace, fraction, width) {
+  function noteY(L, lane, timeUntilHit, approach, trace) {
+    return lerp(guideBottom(L, lane, trace), L.spawnY, clamp(timeUntilHit / approach, 0, 1));
+  }
+  function knobAngle(position) { return (clamp(position, 0, 1) - 0.5) * 2 * KNOB_SWEEP; }
+  function knobTip(L, lane, angle) {
+    return planePt(L, lane.flatX, lane.flatY, L.flat.knobR, angle, L.knobH);
+  }
+  function positionOffset(position, lane) {
+    return Math.sin(knobAngle(position)) * lane.pointerRadius;
+  }
+  function traceOffset(trace, fraction, width, lane) {
     if (!trace) return 0;
+    if (isPositionTrace(trace)) {
+      var position = trace.position;
+      for (var change of trace.changes) {
+        if (change.fraction > fraction + 1e-12) break;
+        position = change.position;
+      }
+      return positionOffset(position, lane);
+    }
     var index = clamp(fraction, 0, 1) * (trace.length - 1), i = Math.floor(index);
     var turn = lerp(trace[i], trace[Math.min(i + 1, trace.length - 1)], index - i);
-    return Math.tanh(turn * 5) * (width / 2 - 5);
+    return clamp(turn, -1, 1) * (width / 2 - 5);
   }
   // a flat circle on the deck plane, lifted by `lift` px (knob height), as a projected path
   function planeCircle(ctx, L, cx, cy, r, lift, a0, a1, ccw) {
@@ -116,11 +136,14 @@
     if (ccw) { var t = from; from = to; to = t; }
     ctx.beginPath();
     for (i = 0; i <= n; i++) {
-      var a = from + (to - from) * i / n, p = L.P(cx + Math.sin(a) * r, cy - Math.cos(a) * r);
-      if (i) ctx.lineTo(p.x, p.y - lift * p.s); else ctx.moveTo(p.x, p.y - lift * p.s);
+      var a = from + (to - from) * i / n, p = planePt(L, cx, cy, r, a, lift);
+      if (i) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y);
     }
   }
-  function planePt(L, cx, cy, r, a, lift) { var p = L.P(cx + Math.sin(a) * r, cy - Math.cos(a) * r); return { x: p.x, y: p.y - lift * p.s }; }
+  function planePt(L, cx, cy, r, a, lift) {
+    var center = L.P(cx, cy), depth = L.P(cx, cy - Math.cos(a) * r);
+    return { x: center.x + Math.sin(a) * (r * center.s), y: depth.y - lift * depth.s };
+  }
 
   // ---------------------------------------------------------------- stage
   function createStage(rootEl) {
@@ -580,6 +603,10 @@
     });
     var jx = 510 + ox, jy = 612;
     (function (ctx) {
+      var wheel = o.wheels && o.wheels[side === 1 ? 'a' : 'b'], angle = wheel
+        ? wheel.time * Math.PI * 2 * 33.333333 / 60
+        : 0;
+      ctx.save(); ctx.translate(jx, jy); ctx.rotate(angle); ctx.translate(-jx, -jy);
       ctx.fillStyle = '#0d0c10'; circ(ctx, jx, jy + 6, 117); ctx.fill();
       ctx.fillStyle = '#19181d'; circ(ctx, jx, jy, 114); ctx.fill();
       ctx.strokeStyle = '#28272d'; ctx.lineWidth = 6; circ(ctx, jx, jy, 105); ctx.stroke();
@@ -592,6 +619,7 @@
       ctx.strokeStyle = '#aaaab3'; ctx.lineWidth = 5; circ(ctx, jx, jy, 30); ctx.stroke();
       ctx.fillStyle = '#3a3a42'; circ(ctx, jx, jy, 20); ctx.fill();
       ctx.strokeStyle = '#0d0c10'; ctx.lineWidth = 3; circ(ctx, jx, jy, 95); ctx.stroke();
+      ctx.restore();
     })(ctx);
     soft(ctx, function (ctx) {
       ctx.fillStyle = '#131216'; ctx.fillRect(426 + ox, 768, 15, 15);
@@ -646,7 +674,10 @@
         ctx.strokeStyle = C.amber; ctx.lineWidth = 2; ctx.strokeRect(x - 13, 725, 26, 15);
       });
       ctx.fillStyle = '#0a090d'; ctx.fillRect(730, 882, 140, 6);
-      ctx.fillStyle = '#5a5a63'; ctx.fillRect(792, 870, 16, 30);
+      var crossfade = Number.isFinite(o.crossfade) ? Math.max(0, Math.min(16383, o.crossfade)) / 16383 : 0.5;
+      var crossfadeX = 730 + crossfade * 140;
+      ctx.fillStyle = '#5a5a63'; ctx.fillRect(crossfadeX - 8, 870, 16, 30);
+      ctx.fillStyle = C.cyan; ctx.fillRect(crossfadeX - 5, 878, 10, 3);
     });
     // channel (volume) faders -> a pair of narrow level meters on the surface
     if (o.eq) { o.eq.drawMeter(ctx, 752, 752, 16, 98, 8, 0); o.eq.drawMeter(ctx, 832, 752, 16, 98, 8, 1); }
@@ -698,10 +729,8 @@
       }
       ctx.restore();
     },
-    // sharp layer: mapped knobs as small cylinders, live pointer ("beam") pivoting on the knob top in
-    // the deck plane, 30-degree cue arc, ready ring, movement trail and judgment flash.
-    // knobs: map 'ch:ROW' -> {angle, ready, cue, flashT, flashJ, moveT, moveDir}
-    drawOverlay: function (ctx, L, knobs, now) {
+    // Knob bodies and their live position indicators.
+    drawOverlay: function (ctx, L, knobs) {
       var F = L.flat, R = F.knobR, H = L.knobH;
       ctx.save(); ctx.lineJoin = 'round';
       ctx.font = '12px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -719,49 +748,12 @@
           planeCircle(ctx, L, fx, fy, R * 0.68, H); ctx.fillStyle = '#34333b'; ctx.fill();
           // scale ticks around the knob (every 30 degrees) so a 30-degree turn has a visible ruler
           ctx.strokeStyle = hexA(C.cream, 0.3); ctx.lineWidth = 1.5; ctx.beginPath();
-          for (var t = -5; t <= 5; t++) { var ta = t * Math.PI / 6, p1 = planePt(L, fx, fy, R + 3, ta, 0), p2 = planePt(L, fx, fy, R + 6, ta, 0); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); }
+          for (var t = -3; t <= 3; t++) { var ta = t * Math.PI / 6, p1 = planePt(L, fx, fy, R + 3, ta, 0), p2 = planePt(L, fx, fy, R + 6, ta, 0); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); }
           ctx.stroke();
-          var ready = k.ready || 0, ang = k.angle || 0;
-          if (ready > 0) { planeCircle(ctx, L, fx, fy, R + 9, H); ctx.strokeStyle = hexA(C.cream, 0.1 + 0.6 * ready * ready); ctx.lineWidth = 2; ctx.stroke(); }
-          // cue: where this turn should land
-          if (k.cue) {
-            var sgn = k.cue.dir === 'cw' ? 1 : -1, tgt = k.cue.from + sgn * k.cue.deg * Math.PI / 180, ca = 0.35 + 0.65 * ready;
-            // wedge on the knob top from where the beam is to where it should end up
-            var c0w = planePt(L, fx, fy, 0, 0, H), n = 12, i;
-            ctx.beginPath(); ctx.moveTo(c0w.x, c0w.y);
-            for (i = 0; i <= n; i++) { var pw = planePt(L, fx, fy, R - 1, k.cue.from + (tgt - k.cue.from) * i / n, H); ctx.lineTo(pw.x, pw.y); }
-            ctx.closePath(); ctx.fillStyle = hexA(C.cream, 0.5 * ca); ctx.fill();
-            // ghost beam at the target
-            var g0 = planePt(L, fx, fy, 0, tgt, H), g1 = planePt(L, fx, fy, R + 9, tgt, H);
-            ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(g0.x, g0.y); ctx.lineTo(g1.x, g1.y);
-            ctx.strokeStyle = C.void; ctx.lineWidth = 6; ctx.stroke();
-            ctx.strokeStyle = hexA(C.cyan, ca); ctx.lineWidth = 3; ctx.stroke();
-            // rim arrow in the turn direction
-            planeCircle(ctx, L, fx, fy, R + 5, H, k.cue.from, tgt, sgn < 0);
-            ctx.strokeStyle = C.void; ctx.lineWidth = 6; ctx.lineCap = 'butt'; ctx.stroke();
-            ctx.strokeStyle = hexA(C.cream, ca); ctx.lineWidth = 3; ctx.stroke();
-            var tip = planePt(L, fx, fy, R + 5, tgt, H), back = planePt(L, fx, fy, R + 5, tgt - sgn * 0.3, H);
-            var dx = tip.x - back.x, dy = tip.y - back.y, dl = Math.hypot(dx, dy) || 1; dx /= dl; dy /= dl;
-            ctx.fillStyle = hexA(C.cream, ca); ctx.beginPath(); ctx.moveTo(tip.x + dx * 7, tip.y + dy * 7); ctx.lineTo(tip.x - dx * 3 - dy * 6, tip.y - dy * 3 + dx * 6); ctx.lineTo(tip.x - dx * 3 + dy * 6, tip.y - dy * 3 - dx * 6); ctx.closePath(); ctx.fill();
-          }
-          var mp = (now - (k.moveT == null ? -9 : k.moveT)) / 0.25;
-          if (mp < 1 && k.moveDir) {
-            planeCircle(ctx, L, fx, fy, R + 9, H, ang - k.moveDir * 0.7, ang, k.moveDir < 0);
-            ctx.strokeStyle = hexA(C.cyan, 0.8 * (1 - mp)); ctx.lineWidth = 3; ctx.stroke();
-          }
-          // the beam: pivots on the knob top centre, sweeps in the deck plane
-          var c0 = planePt(L, fx, fy, 0, ang, H), c1 = planePt(L, fx, fy, R + 2, ang, H);
+          var angle = k.angle || 0;
+          var c0 = planePt(L, fx, fy, 0, angle, H), c1 = knobTip(L, lane, angle);
           ctx.strokeStyle = C.void; ctx.lineWidth = 6; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(c0.x, c0.y); ctx.lineTo(c1.x, c1.y); ctx.stroke();
           ctx.strokeStyle = C.cream; ctx.lineWidth = 3.5; ctx.stroke();
-          ctx.fillStyle = C.cream; ctx.beginPath(); ctx.arc(c0.x, c0.y, 2.5, 0, Math.PI * 2); ctx.fill();
-          var fp = (now - (k.flashT == null ? -9 : k.flashT)) / 0.4;
-          if (fp >= 0 && fp < 1) {
-            var col = JCOL[k.flashJ] || C.cream, a = 1 - fp;
-            ctx.save(); ctx.shadowColor = col; ctx.shadowBlur = 18 * a;
-            planeCircle(ctx, L, fx, fy, R + 8 + 8 * fp, H); ctx.strokeStyle = hexA(col, a); ctx.lineWidth = 5;
-            if (k.flashJ === 'miss') ctx.setLineDash([5, 4]); ctx.stroke(); ctx.restore();
-            planeCircle(ctx, L, fx, fy, R, H); ctx.fillStyle = hexA(col, 0.3 * a); ctx.fill();
-          }
         });
       });
       ctx.restore();
@@ -827,7 +819,6 @@
       if (f.j !== 'miss') {
         var p = clamp(t / 0.35, 0, 1), a = 1 - p;
         ctx.strokeStyle = hexA(col, a); ctx.lineWidth = f.j === 'perfect' ? 5 : 3;
-        circ(ctx, f.x, f.y, 26 + p * (f.j === 'perfect' ? 30 : 18)); ctx.stroke();
         if (f.j === 'perfect') {
           ctx.lineWidth = 3; ctx.beginPath();
           for (k = 0; k < 10; k++) { var an = k / 10 * Math.PI * 2 + 0.2; ctx.moveTo(f.x + Math.cos(an) * (30 + p * 20), f.y + Math.sin(an) * (30 + p * 20)); ctx.lineTo(f.x + Math.cos(an) * (40 + p * 34), f.y + Math.sin(an) * (40 + p * 34)); }
@@ -857,7 +848,7 @@
       L.rows.forEach(function (row) {
         [1, 2].forEach(function (ch) {
           var lane = L.lanes[ch][row], left = lane.x - width / 2;
-          var bottom = lane.hitY - L.markerR;
+          var bottom = lane.hitY;
           var band = ctx.createLinearGradient(0, 0, 0, bottom);
           band.addColorStop(0, 'rgba(11,8,20,.58)'); band.addColorStop(1, 'rgba(11,8,20,.83)');
           ctx.fillStyle = band; ctx.fillRect(left, 0, width, bottom);
@@ -869,7 +860,7 @@
 
           if (!o.spb) return;
           for (var beat = Math.ceil(o.time / o.spb); beat * o.spb <= o.time + o.approach; beat++) {
-            var y = noteY(L, lane, beat * o.spb - o.time, o.approach);
+            var y = noteY(L, lane, beat * o.spb - o.time, o.approach, o.traces && o.traces[key(ch, row)]);
             if (y < 0 || y > bottom) continue;
             var downbeat = beat % 4 === 0;
             ctx.fillStyle = hexA(C.cream, downbeat ? 0.42 : 0.18);
@@ -880,21 +871,35 @@
       ctx.restore();
     },
     drawGuides: function (ctx, L, upcoming, traces) {
-      ctx.save(); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      ctx.save(); ctx.lineJoin = 'round'; ctx.lineCap = 'butt';
       L.rows.forEach(function (row) {
         [1, 2].forEach(function (ch) {
           var id = key(ch, row), lane = L.lanes[ch][row], trace = traces && traces[id];
           var color = ch === 1 ? C.magenta : C.cyan;
-          var segments = trace ? trace.length - 1 : 1;
-          ctx.beginPath(); ctx.moveTo(lane.x, lane.hitY);
-          for (var i = 1; i <= segments; i++) {
-            var f = i / segments;
-            ctx.lineTo(lane.x + traceOffset(trace, f, L.laneWidth), lerp(lane.hitY, L.spawnY, f));
+          var absolute = isPositionTrace(trace), bottom = guideBottom(L, lane, trace);
+          ctx.beginPath();
+          if (absolute) {
+            var x = lane.x + positionOffset(trace.position, lane);
+            ctx.moveTo(x, bottom);
+            for (var change of trace.changes) {
+              var y = lerp(bottom, L.spawnY, change.fraction);
+              ctx.lineTo(x, y);
+              x = lane.x + positionOffset(change.position, lane);
+              ctx.lineTo(x, y);
+            }
+            ctx.lineTo(x, L.spawnY);
+          } else {
+            var segments = trace ? trace.length - 1 : 1;
+            ctx.moveTo(lane.x, bottom);
+            for (var i = 1; i <= segments; i++) {
+              var f = i / segments;
+              ctx.lineTo(lane.x + traceOffset(trace, f, L.laneWidth, lane), lerp(bottom, L.spawnY, f));
+            }
           }
-          var moving = upcoming[id] || trace;
-          ctx.strokeStyle = hexA(color, 0.24); ctx.lineWidth = moving ? 6 : 3; ctx.stroke();
-          ctx.strokeStyle = moving ? C.cream : hexA(color, 0.74);
-          ctx.lineWidth = moving ? 2.5 : 1.5; ctx.stroke();
+          var moving = upcoming[id] || (absolute ? trace.changes.length : trace);
+          ctx.strokeStyle = hexA(color, 0.30); ctx.lineWidth = moving ? 10 : 5; ctx.stroke();
+          ctx.strokeStyle = moving ? color : hexA(color, 0.74);
+          ctx.lineWidth = moving ? 4 : 2; ctx.stroke();
         });
       });
       ctx.restore();
@@ -911,8 +916,8 @@
     poly(ctx, [[x + c + 4, y + 5], [x + w - c - 4, y + 5], [x + w - 5, y + c + 4], [x + w - 5, y + h - c - 4], [x + w - c - 4, y + h - 5], [x + c + 4, y + h - 5], [x + 5, y + h - c - 4], [x + 5, y + c + 4]]); ctx.stroke();
   }
   // left column: score, then combo (with multiplier and hype) underneath. top right: webcam slot.
-  var CAM = { x: W - 414, y: 20, w: 392, h: 221 };   // 16:9 inner frame for the player's live webcam
-  var HYPE_BAR = { x: CAM.x - 86, y: CAM.y + 27, w: 52, h: CAM.h - 51 };
+  var CAM = { x: W - 342, y: 20, w: 320, h: 180 };   // 16:9 inner frame for the player's live webcam
+  var HYPE_BAR = { x: CAM.x - 76, y: CAM.y + 27, w: 52, h: CAM.h - 51 };
 
   function drawHypeMeter(ctx, frame) {
     var r = HYPE_BAR, color = [C.violet, C.cyan, C.amber, C.magenta][frame.tier];
@@ -1346,7 +1351,7 @@
       webcam = v;
     }
     if (opts.webcam) setWebcam(opts.webcam);
-    var knobs = {}, markers = {}, turnListeners = [];
+    var knobs = {}, turnListeners = [];
     var smoothing = opts.knobSmoothing == null ? 0.035 : opts.knobSmoothing; // seconds; subtle
     var clock = 0, energy = 0, lastCombo = 0, frameState = null;
     ROWS.forEach(function (r) { [1, 2].forEach(function (ch) { knobs[key(ch, r)] = { pos: 0.5, target: 0.5, angle: 0 }; }); });
@@ -1359,16 +1364,13 @@
       var d = next - before;
       k.target = next;
       if (smoothing <= 0) k.pos = next;
-      if (d !== 0) { k.moveT = clock; k.moveDir = d > 0 ? 1 : -1; }
       var turn = { channel: ev.channel, row: ev.row, dir: d > 0 ? 'cw' : d < 0 ? 'ccw' : null, amount: d, position: next };
       if (turn.dir) turnListeners.forEach(function (fn) { fn(turn); });
       return turn;
     }
     function showJudgment(ev) {
-      var lane = L.lanes[ev.channel] && L.lanes[ev.channel][ev.row], k = knobs[key(ev.channel, ev.row)];
-      if (!lane || !k) return;
-      k.flashT = clock; k.flashJ = ev.judgment;
-      markers[key(ev.channel, ev.row)] = { flashT: clock, flashJ: ev.judgment };
+      var lane = L.lanes[ev.channel] && L.lanes[ev.channel][ev.row];
+      if (!lane) return;
       fx.spawn(ev.judgment, lane.x, lane.hitY, ev.channel, ev.reason === 'wrong-way' ? 'WRONG WAY' : null);
     }
 
@@ -1397,29 +1399,17 @@
       Object.keys(knobs).forEach(function (id) {
         var k = knobs[id];
         k.pos = smoothing > 0 ? k.pos + (k.target - k.pos) * Math.min(1, dt / smoothing) : k.target;
-        k.angle = (k.pos - 0.5) * 2 * KNOB_SWEEP; k.ready = 0;
+        k.angle = knobAngle(k.pos);
       });
-      // readiness per lane from the nearest pending note
-      var ready = {}, due = {}, upcoming = {};
+      var upcoming = {};
       (f.notes || []).forEach(function (n) {
         if (n.state !== 'pending' || L.rows.indexOf(n.row) < 0) return;
         var d = n.time - f.time;
         if (d >= 0 && d <= approach) upcoming[key(n.channel, n.row)] = true;
-        if (d < -0.15 || d > 0.55) return;
-        var r = d <= 0 ? 1 : 1 - d / 0.55, id = key(n.channel, n.row);
-        if (!ready[id] || r > ready[id]) { ready[id] = r; due[id] = n; }
-      });
-      Object.keys(knobs).forEach(function (id) {
-        var k = knobs[id], n = due[id];
-        k.ready = ready[id] || 0;
-        // cue = the turn this note asks for, measured from where the knob is when the note arrives
-        if (!n) k.cue = null;
-        else if (!k.cue || k.cue.id !== n.id) k.cue = { id: n.id, dir: n.dir, deg: n.degrees || 30,
-          from: typeof n.startPosition === 'number' ? (n.startPosition - 0.5) * 2 * KNOB_SWEEP : k.angle };
       });
 
       // retro layer
-      var vo = { t: tAbs, e: energy, beat: beat, fxOn: energy > 0.6, eq: eq };
+      var vo = { t: tAbs, e: energy, beat: beat, fxOn: energy > 0.6, eq: eq, wheels: f.wheels, crossfade: f.crossfade };
       stage.beginLow();
       if (show.venue) Venue.draw(stage.low, vo); else { stage.low.fillStyle = C.void; stage.low.fillRect(0, 0, W, H); }
       if (show.hud && confetti) drawHypeConfetti(stage.low, confetti.pieces, celebration, false);
@@ -1433,15 +1423,9 @@
       // sharp layer
       var s = stage.sharp; s.setTransform(1, 0, 0, 1, 0, 0); s.clearRect(0, 0, W, H);
       if (show.hud && confetti) drawHypeConfetti(s, confetti.pieces, celebration, true);
-      NoteLanes.draw(s, L, { time: f.time, approach: approach, spb: spb });
+      NoteLanes.draw(s, L, { time: f.time, approach: approach, spb: spb, traces: f.traces });
       NoteLanes.drawGuides(s, L, upcoming, f.traces);
-      if (show.deck) Deck.drawOverlay(s, L, knobs, clock);
-      L.rows.forEach(function (row) {
-        [1, 2].forEach(function (ch) {
-          var m = markers[key(ch, row)] || {}, lane = L.lanes[ch][row];
-          HitMarker.draw(s, lane.x, lane.hitY, { r: L.markerR, ready: ready[key(ch, row)] || 0, flashT: m.flashT, flashJ: m.flashJ, now: clock, side: ch });
-        });
-      });
+      if (show.deck) Deck.drawOverlay(s, L, knobs);
       (f.notes || []).forEach(function (n) {
         if (L.rows.indexOf(n.row) < 0 || n.state === 'hit') return;
         var d = n.time - f.time; if (d > approach) return;
@@ -1449,7 +1433,7 @@
         if (n.state === 'miss') { alpha = 1 - (f.time - (n.judgedAt == null ? n.time : n.judgedAt)) / 0.35; if (alpha <= 0) return; }
         var lane = L.lanes[n.channel][n.row];
         var trace = f.traces && f.traces[key(n.channel, n.row)];
-        Note.draw(s, lane.x + traceOffset(trace, d / approach, L.laneWidth), noteY(L, lane, d, approach), n.dir, { r: L.noteR, tail: n.state === 'pending', alpha: alpha });
+        Note.draw(s, lane.x + traceOffset(trace, d / approach, L.laneWidth, lane), noteY(L, lane, d, approach, trace), n.dir, { r: L.noteR, tail: n.state === 'pending', alpha: alpha });
       });
       if (f.entryCue) {
         var jog = L.P(510 + L.flat.deckOffset[2], 612);
@@ -1578,7 +1562,7 @@
         gestures = gestures.filter(function (g) { return g.left > 0; });
         if (autoplay) {
           notes.forEach(function (n) {
-            if (n.state === 'pending' && n.autoAt != null && !n._auto && time >= n.autoAt - 0.03) { n._auto = true; gesture(n.channel, n.row, n.dir, 30 / 298); }
+            if (n.state === 'pending' && n.autoAt != null && !n._auto && time >= n.autoAt - 0.03) { n._auto = true; gesture(n.channel, n.row, n.dir, 30 / 180); }
           });
           // idle noodling: knobs move even when no note is due
           idleNext -= dt;

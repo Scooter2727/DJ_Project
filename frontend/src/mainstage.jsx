@@ -165,7 +165,7 @@ function MainstageApp() {
     const screen = api.createScreen(mountRef.current, {
       rows: ROWS,
       source: session.source,
-      knobSmoothing: 0.035,
+      knobSmoothing: 0,
       show: { venue: true, crowd: true, deck: true, hud: true, webcam: true },
       getCrowdHype: dt => {
         const playing = audioRef.current?.isPlaying(previewDeck) ?? false;
