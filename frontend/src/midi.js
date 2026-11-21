@@ -5,6 +5,7 @@ const deckKnobs = {
 const mixerKnobs = { 0x08: "master", 0x1f: "crossfade" };
 const cfxKnobs = { 0x17: "a.cfx", 0x18: "b.cfx" };
 const transportButtons = { 0x10: "loopIn", 0x11: "loopOut", 0x4d: "loop4", 0x58: "sync" };
+const JOG_SENSITIVITY = 0.35;
 
 export function decodeMidi([status, id, value], current) {
   const kind = status & 0xf0;
@@ -22,7 +23,7 @@ export function decodeMidi([status, id, value], current) {
     }
     if (channel < 2 && id >= 0x21 && id <= 0x23) {
       const key = deck + ".jog";
-      return { [key]: (current[key] ?? 0) + (value - 64) * 3 };
+      return { [key]: (current[key] ?? 0) + (value - 64) * JOG_SENSITIVITY };
     }
     const controls = channel === 6 ? mixerKnobs : channel < 2 ? deckKnobs : {};
     const coarseId = id >= 0x20 ? id - 0x20 : id;
