@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { decodeMidi } from "./midi.js";
+import { DanceScreen } from "./crowd/DanceScreen.jsx";
 import { scoreRecording, upcomingContinuousControls } from "./scoring.js";
 import { MixAudioEngine } from "./audio.js";
 import "./style.css";
+import "./crowd/crowd.css";
 
 const percent = value => value === undefined ? "—" : Math.round(value / 16383 * 100) + "%";
 const pairs = [["trim", "Trim"], ["high", "High EQ"], ["mid", "Mid EQ"], ["low", "Low EQ"], ["cfx", "CFX"]];
@@ -451,4 +453,4 @@ function App() {
   </main>;
 }
 
-createRoot(document.getElementById("root")).render(<App />);
+createRoot(document.getElementById("root")).render(<DanceScreen />);

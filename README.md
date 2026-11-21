@@ -1,6 +1,6 @@
 # Deck Relay
 
-A React console that mirrors MIDI input from the Pioneer DDJ-FLX4.
+A React console that mirrors MIDI input from the Pioneer DDJ-FLX4 and includes Crowd Factor, an on-device pose-tracking dance bonus.
 
 ## Run locally
 
