@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { decodeMidi } from "./midi.js";
-import { DanceScreen } from "./crowd/DanceScreen.jsx";
 import { scoreRecording, upcomingContinuousControls } from "./scoring.js";
 import { MixAudioEngine } from "./audio.js";
 import "./style.css";
@@ -512,4 +511,4 @@ function App() {
   </main>;
 }
 
-createRoot(document.getElementById("root")).render(<DanceScreen />);
+createRoot(document.getElementById("root")).render(<App />);

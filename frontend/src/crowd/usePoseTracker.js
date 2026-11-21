@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { analyzeDance, createDanceState } from "./danceScorer.js";
 
 const WASM_ROOT = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.3/wasm";
+const MEDIAPIPE_MODULE_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.3/vision_bundle.mjs";
 const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task";
 const EMPTY_METRICS = { detected: false, score: 0, crowd: 0, burst: 0, motion: 0, raised: 0, armsUp: 0, flickPulse: 0, pumpPulse: 0 };
 const EMPTY_GESTURES = { leftFlick: false, rightFlick: false, leftPump: false, rightPump: false };
@@ -76,7 +77,9 @@ export function usePoseTracker({ videoRef, config, maxFps = 15, onFrame }) {
       await video.play();
 
       setSnapshot(current => ({ ...current, status: "loading", message: "Loading pose model…" }));
-      const { FilesetResolver, PoseLandmarker } = await import("@mediapipe/tasks-vision");
+      // Keep this as a browser-side CDN import so the app can build even when
+      // the optional MediaPipe package has not been installed locally yet.
+      const { FilesetResolver, PoseLandmarker } = await import(/* @vite-ignore */ MEDIAPIPE_MODULE_URL);
       const vision = await FilesetResolver.forVisionTasks(WASM_ROOT);
       const options = {
         baseOptions: { modelAssetPath: MODEL_URL, delegate: "GPU" },
