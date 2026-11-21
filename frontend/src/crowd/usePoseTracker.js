@@ -7,7 +7,7 @@ const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/pose_landmark
 const EMPTY_METRICS = { detected: false, score: 0, crowd: 0, burst: 0, motion: 0, raised: 0, armsUp: 0, flickPulse: 0, pumpPulse: 0 };
 const EMPTY_GESTURES = { leftFlick: false, rightFlick: false, leftPump: false, rightPump: false };
 
-export function usePoseTracker({ videoRef, config, maxFps = 15, onFrame }) {
+export function usePoseTracker({ videoRef, config, maxFps = 15, onFrame, onMask }) {
   const [snapshot, setSnapshot] = useState({
     status: "off",
     message: "Camera is off",
@@ -27,9 +27,12 @@ export function usePoseTracker({ videoRef, config, maxFps = 15, onFrame }) {
   const danceState = useRef(createDanceState());
   const configRef = useRef(config);
   const onFrameRef = useRef(onFrame);
+  const onMaskRef = useRef(onMask);
+  const outputSegmentationMasks = Boolean(onMask);
 
   useEffect(() => { configRef.current = config; }, [config]);
   useEffect(() => { onFrameRef.current = onFrame; }, [onFrame]);
+  useEffect(() => { onMaskRef.current = onMask; }, [onMask]);
 
   const stop = useCallback(() => {
     request.current = null;
@@ -98,17 +101,23 @@ export function usePoseTracker({ videoRef, config, maxFps = 15, onFrame }) {
         minPoseDetectionConfidence: 0.5,
         minPosePresenceConfidence: 0.5,
         minTrackingConfidence: 0.5,
-        outputSegmentationMasks: false,
+        outputSegmentationMasks,
       };
       let tracker;
       try {
         tracker = await PoseLandmarker.createFromOptions(vision, options);
       } catch {
         if (request.current !== attempt) return;
-        tracker = await PoseLandmarker.createFromOptions(vision, {
+        const cpuOptions = {
           ...options,
           baseOptions: { modelAssetPath: MODEL_URL, delegate: "CPU" },
-        });
+        };
+        try {
+          tracker = await PoseLandmarker.createFromOptions(vision, cpuOptions);
+        } catch (error) {
+          if (!outputSegmentationMasks || request.current !== attempt) throw error;
+          tracker = await PoseLandmarker.createFromOptions(vision, { ...cpuOptions, outputSegmentationMasks: false });
+        }
       }
       if (request.current !== attempt) {
         tracker.close();
@@ -148,6 +157,8 @@ export function usePoseTracker({ videoRef, config, maxFps = 15, onFrame }) {
             };
             if (mounted.current) setSnapshot(next);
             onFrameRef.current?.(next);
+            // MediaPipe owns the mask and releases it when this callback returns.
+            onMaskRef.current?.(landmarks ? result.segmentationMasks?.[0] : null, now);
           });
         }
         if (request.current === attempt) animation.current = requestAnimationFrame(loop);
@@ -165,7 +176,7 @@ export function usePoseTracker({ videoRef, config, maxFps = 15, onFrame }) {
           : denied ? "Camera permission was denied." : `Camera could not start: ${error?.message || "Unknown error"}`,
       }));
     }
-  }, [maxFps, stop, videoRef]);
+  }, [maxFps, outputSegmentationMasks, stop, videoRef]);
 
   useEffect(() => {
     mounted.current = true;

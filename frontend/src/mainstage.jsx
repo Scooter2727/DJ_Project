@@ -6,6 +6,7 @@ import { buildMixChart, ROW_BY_CONTROL } from "./mixChart.js";
 import { createMixSession } from "./mixSession.js";
 import { DEFAULT_DANCE_CONFIG } from "./crowd/danceScorer.js";
 import { createMainstageHype, STARTING_HYPE } from "./crowd/mainstageHype.js";
+import { createWebcamFilters } from "./crowd/webcamFilters.js";
 import { usePoseTracker } from "./crowd/usePoseTracker.js";
 import "./mainstage.css";
 
@@ -37,6 +38,7 @@ function MainstageApp() {
   const screenRef = useRef(null);
   const sessionRef = useRef(null);
   const cameraVideoRef = useRef(null);
+  const webcamFiltersRef = useRef(null);
   const hypeRef = useRef(null);
   const hypeMeterRef = useRef(null);
   const audioRef = useRef(null);
@@ -90,6 +92,7 @@ function MainstageApp() {
   const [previewPlaying, setPreviewPlaying] = useState(false);
   const previewDeck = selectedTrack.id === "levels" ? "b" : "a";
   if (hypeRef.current === null) hypeRef.current = createMainstageHype();
+  if (webcamFiltersRef.current === null) webcamFiltersRef.current = createWebcamFilters();
 
   const readPlayback = useCallback(() => {
     const playback = audioRef.current?.playbackPosition();
@@ -100,9 +103,13 @@ function MainstageApp() {
 
   const onPoseFrame = useCallback(frame => {
     if (modeRef.current === "game") hypeRef.current.awardFlick(readPlayback(), frame, performance.now());
+    webcamFiltersRef.current.updatePose(frame.landmarks, frame.timestamp);
   }, [readPlayback]);
 
-  const camera = usePoseTracker({ videoRef: cameraVideoRef, config: DEFAULT_DANCE_CONFIG, maxFps: 24, onFrame: onPoseFrame });
+  const camera = usePoseTracker({
+    videoRef: cameraVideoRef, config: DEFAULT_DANCE_CONFIG, maxFps: 24,
+    onFrame: onPoseFrame, onMask: webcamFiltersRef.current.updateMask,
+  });
   const { start: startCamera, stop: stopCamera } = camera;
   const cameraFailed = cameraOn && camera.status === "error" && !camera.cameraActive;
 
@@ -206,6 +213,7 @@ function MainstageApp() {
       source: session.source,
       knobSmoothing: 0,
       show: { venue: true, crowd: true, deck: true, hud: true, webcam: true },
+      drawWebcamEffects: webcamFiltersRef.current.draw,
       getCrowdHype: dt => {
         const playing = audioRef.current?.isPlaying(previewDeck) ?? false;
         if (playing !== playbackButtonState.current) {
@@ -232,6 +240,7 @@ function MainstageApp() {
 
   useEffect(() => {
     screenRef.current?.setWebcam(cameraOn ? cameraVideoRef.current : null);
+    if (!cameraOn || mode !== "game") webcamFiltersRef.current.reset();
   }, [mode, gameMix, cameraOn]);
 
   useEffect(() => {
