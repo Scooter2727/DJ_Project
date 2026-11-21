@@ -16,20 +16,10 @@ Open the localhost URL printed by Vite in desktop Chrome or Edge. Plug the FLX4 
 
 If the controller does not appear, check that the cable supports data. If the MIDI input will not open, close other DJ software and reconnect.
 
-The display follows MIDI messages as controls move. A dash means the app has yet to receive a value for that control. The Play indicator toggles with Play presses. The console displays controller input and does not play or mix audio.
+## In-app audio challenge mode
 
-## Crowd Factor
+Deck Relay loads the two bundled `mix1` tracks into its own Web Audio mixer. Rekordbox is not required. Connect the FLX4, load `mix1`, and click **Start challenge**. The app starts both tracks, applies the FLX4's channel volume, EQ, CFX, and crossfader controls to the audio, and scores the live performance against the reference timeline.
 
-Click the page and grant front-camera access. A short beat starts, and countdown bars travel along the bottom toward the flick line. The bright band around the line is the timing window. Type a BPM from 60 to 180 in the number field and press Enter. Flick one hand above your shoulder as a bar reaches the line. An on-time flick raises the crowd meter, with a larger rise for a closer hit. Both arms above the shoulders on time multiplies that rise by 1.5. A missed bar adds nothing. A still hand, movement at or below the shoulders, or an off-beat flick lowers the meter. Finger shape does not add extra points.
+The bundled `mix1` sources are `frontend/public/mixes/mix1/deck-a.mp3` (Alesso — *Heroes (we could be)*) and `frontend/public/mixes/mix1/deck-b.mp3` (Avicii — *Levels (Radio Edit)*). Load those same files into Rekordbox for the challenge.
 
-Camera frames are processed locally in the browser and are not uploaded or recorded. Camera and MIDI access require `localhost` or HTTPS. The MediaPipe runtime and pose model are downloaded when the feature is first enabled, so the first start requires an internet connection.
-
-Open `/vision-lab.html` to run the camera without a controller. The lab displays pose landmarks, detector metrics and gesture counts. Its sliders update detection thresholds immediately and can export the resulting configuration as JSON.
-
-## Checks
-
-```sh
-cd frontend
-npm test
-npm run build
-```
+The display follows MIDI messages as controls move. A dash means the app has yet to receive a value for that control. The Play indicator toggles with Play presses. Jog wheels remain available for the game layer and can be mapped to scratching or seeking later.
