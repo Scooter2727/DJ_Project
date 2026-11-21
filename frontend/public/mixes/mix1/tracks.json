@@ -4,11 +4,15 @@
   "deckA": {
     "title": "Heroes (we could be)",
     "artist": "Alesso",
-    "file": "/mixes/mix1/deck-a.mp3"
+    "file": "/mixes/mix1/deck-a.mp3",
+    "tempo": 126.1,
+    "beatOffsetSeconds": 0.326
   },
   "deckB": {
     "title": "Levels (Radio Edit)",
     "artist": "Avicii",
-    "file": "/mixes/mix1/deck-b.mp3"
+    "file": "/mixes/mix1/deck-b.mp3",
+    "tempo": 125.98,
+    "beatOffsetSeconds": 0.439
   }
 }

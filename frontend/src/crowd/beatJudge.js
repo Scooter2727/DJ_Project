@@ -49,9 +49,9 @@ export function judgeArmFlick(state, songTimeMs, cues, loopMs, windows = BEAT_WI
   return { state: { resolved }, judgment: cueZone(noteTime - songTimeMs, windows), noteTime };
 }
 
-export function skippedCueDeadline(lastScoredCue, cues, loopMs) {
-  const nextCues = noteTimes(lastScoredCue ?? 0, loopMs, cues, loopMs)
-    .filter(time => lastScoredCue === null || time > lastScoredCue);
+export function skippedCueDeadline(lastScoredCue, cues, loopMs, startMs = 0) {
+  const nextCues = noteTimes(lastScoredCue ?? startMs, loopMs, cues, loopMs)
+    .filter(time => lastScoredCue === null ? time >= startMs : time > lastScoredCue);
   const skippedCue = nextCues[SKIPS_BEFORE_CROWD_DROP - 1];
   return skippedCue === undefined ? Infinity : skippedCue + BEAT_WINDOWS.perfectMs + FRAME_PROCESSING_GRACE_MS;
 }

@@ -12,7 +12,18 @@ export interface GameSource { frame(dt: number): GameFrame; attach?(screen: Scre
 export interface KnobEvent { channel: Channel; row: Row; position?: number; delta?: number; }
 export interface Turn { channel: Channel; row: Row; dir: Dir | null; amount: number; position: number; }
 
-export interface GameplayScreenProps { source?: GameSource; rows?: Row[]; camera?: { c?: number; k?: number }; knobSmoothing?: number; show?: { venue?: boolean; crowd?: boolean; deck?: boolean; hud?: boolean; webcam?: boolean }; webcam?: MediaStream | HTMLVideoElement; webcamMirror?: boolean; }
+export interface HypeTimingWindow { left: number; width: number; }
+export interface CrowdHypeFrame {
+  level: number;
+  tier: 0 | 1 | 2 | 3;
+  tempo: number | null;
+  beat: number | null;
+  bars: { left: number; zone: 'wait' | 'good' | 'perfect' }[];
+  windows: { good: HypeTimingWindow; perfect: HypeTimingWindow } | null;
+  cueLine: number;
+  celebration: { id: number; elapsed: number; duration: number } | null;
+}
+export interface GameplayScreenProps { source?: GameSource; rows?: Row[]; camera?: { c?: number; k?: number }; knobSmoothing?: number; show?: { venue?: boolean; crowd?: boolean; deck?: boolean; hud?: boolean; webcam?: boolean }; webcam?: MediaStream | HTMLVideoElement; webcamMirror?: boolean; getCrowdHype?(dt: number): CrowdHypeFrame; }
 export interface Screen {
   el: HTMLElement;
   knob(ev: KnobEvent): Turn | null;

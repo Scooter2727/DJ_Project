@@ -15,6 +15,7 @@ export class MixAudioEngine {
       b: new Audio(deckB),
     };
     this.nodes = {};
+    this.timingDeck = "a";
 
     for (const deck of ["a", "b"]) {
       const player = this.players[deck];
@@ -84,7 +85,7 @@ export class MixAudioEngine {
     await this.resume();
     const player = this.players[deck];
     if (playing) {
-      if (player.paused) await player.play();
+      if (player.paused || player.ended) await player.play();
     } else if (!player.paused) {
       player.pause();
     }
@@ -95,10 +96,30 @@ export class MixAudioEngine {
     await Promise.all([this.players.a.play(), this.players.b.play()]);
   }
 
+  isPlaying(deck) {
+    const player = this.players[deck];
+    return !player.paused && !player.ended;
+  }
+
+  playbackPosition() {
+    const otherDeck = this.timingDeck === "a" ? "b" : "a";
+    if (!this.isPlaying(this.timingDeck) && this.isPlaying(otherDeck)) {
+      this.timingDeck = otherDeck;
+    }
+    const player = this.players[this.timingDeck];
+    return {
+      deck: this.timingDeck,
+      positionMs: player.currentTime * 1000,
+      playbackRate: player.playbackRate,
+      playing: this.isPlaying(this.timingDeck) && !player.seeking && player.readyState >= 3 && this.context.state === "running",
+    };
+  }
+
   stop() {
     for (const player of Object.values(this.players)) {
       player.pause();
       player.currentTime = 0;
     }
+    this.timingDeck = "a";
   }
 }
