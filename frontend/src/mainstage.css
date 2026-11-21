@@ -1,0 +1,83 @@
+html, body, #root {
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+  background: #0b0814;
+}
+
+body {
+  overflow-x: hidden;
+}
+
+.mainstage-shell {
+  position: relative;
+  min-height: 100vh;
+  background: #0b0814;
+  color: #f6ecd6;
+}
+
+.mainstage-stage {
+  width: min(100%, 1600px);
+  margin: 0 auto;
+}
+
+.mainstage-stage .flx-stage {
+  min-height: 0;
+}
+
+.mainstage-controls {
+  position: relative;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 16px;
+  border-bottom: 1px solid #3a2160;
+  background: #1a1028;
+}
+
+.mainstage-button,
+.mainstage-select {
+  appearance: none;
+  border: 2px solid #6a6478;
+  border-radius: 4px;
+  background: #0b0814;
+  color: #c9bda4;
+  font: 10px/1 "Press Start 2P", "Courier New", monospace;
+  padding: 8px 10px;
+}
+
+.mainstage-button {
+  cursor: pointer;
+}
+
+.mainstage-button:hover,
+.mainstage-button:focus-visible {
+  border-color: #34e0ff;
+  color: #f6ecd6;
+}
+
+.mainstage-status {
+  overflow: hidden;
+  margin-left: auto;
+  color: #c9bda4;
+  font: 12px/18px "Space Grotesk", system-ui, sans-serif;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mainstage-status.online {
+  color: #6bff9e;
+}
+
+@media (max-width: 720px) {
+  .mainstage-controls {
+    flex-wrap: wrap;
+  }
+
+  .mainstage-status {
+    width: 100%;
+    margin-left: 0;
+  }
+}
