@@ -13,12 +13,19 @@ button:focus-visible, select:focus-visible { outline: 2px solid #eaffb3; outline
 h1, h2, h3, p { margin: 0; }
 h1 { font-size: clamp(24px, 4vw, 37px); letter-spacing: -.06em; line-height: 1.05; }
 .brand p { color: #abb4c5; font-size: .85rem; margin-top: 6px; }
-.connection { justify-content: flex-end; margin-bottom: 18px; }
+.toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 18px; flex-wrap: wrap; }
+.connection { justify-content: flex-end; }
+.recording-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 button, select { border-radius: 10px; padding: 11px 15px; }
 button { border: 1px solid #a78bfa; background: linear-gradient(135deg, #a78bfa, #7c3aed); color: #fff; font-weight: 750; cursor: pointer; box-shadow: 0 8px 24px #7c3aed33; transition: transform .18s ease, box-shadow .18s ease, filter .18s ease; }
 button:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.08); box-shadow: 0 10px 28px #7c3aed55; }
 button:disabled { opacity: .65; cursor: wait; }
 select { background: #222733; border: 1px solid #42495c; }
+.recording-controls button { background: #252b39; border-color: #454d65; box-shadow: none; }
+.recording-controls button:hover:not(:disabled) { box-shadow: 0 8px 18px #080a1088; }
+.record-button.recording { background: #ef476f; border-color: #ff7190; color: #fff; }
+.recording-select { min-width: 180px; max-width: 240px; }
+.loaded-recording { max-width: 180px; overflow: hidden; color: #b7bfcc; font-size: .78rem; text-overflow: ellipsis; white-space: nowrap; }
 .status { margin: 24px 0 12px; color: #b7bfcc; font-size: .84rem; display: flex; align-items: center; gap: 9px; min-height: 20px; }
 .status > span { width: 8px; height: 8px; border-radius: 50%; background: #778298; flex: none; }
 .status > .online { background: #dbfa93; box-shadow: 0 0 10px #dbfa9366; }

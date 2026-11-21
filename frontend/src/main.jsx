@@ -5,6 +5,16 @@ import "./style.css";
 
 const percent = value => value === undefined ? "—" : Math.round(value / 16383 * 100) + "%";
 const pairs = [["trim", "Trim"], ["high", "High EQ"], ["mid", "Mid EQ"], ["low", "Low EQ"], ["cfx", "CFX"]];
+const RECORDINGS_KEY = "deck-relay-recordings";
+
+function savedRecordings() {
+  try {
+    const value = JSON.parse(localStorage.getItem(RECORDINGS_KEY) || "[]");
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
 
 function Meter({ label, value, vertical = false }) {
   const position = value === undefined ? 50 : value / 16383 * 100;
@@ -52,7 +62,14 @@ function App() {
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [frame, setFrame] = useState({ values: {} });
+  const [recordings, setRecordings] = useState(savedRecordings);
+  const [selectedRecordingId, setSelectedRecordingId] = useState("");
+  const [loadedRecording, setLoadedRecording] = useState(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
   const live = useRef(frame);
+  const recordingRef = useRef(null);
+  const playbackRef = useRef(null);
 
   useEffect(() => {
     if (!access) return;
@@ -78,11 +95,20 @@ function App() {
     let active = true;
     let redraw = null;
     function receive(event) {
+      if (playbackRef.current) return;
       const bytes = Array.from(event.data);
       const { values } = live.current;
+      const nextValues = { ...values, ...decodeMidi(bytes, values) };
       live.current = {
-        values: { ...values, ...decodeMidi(bytes, values) },
+        values: nextValues,
       };
+      if (recordingRef.current) {
+        recordingRef.current.events.push({
+          t: performance.now() - recordingRef.current.startedAt,
+          values: nextValues,
+          data: bytes,
+        });
+      }
       if (redraw === null) redraw = requestAnimationFrame(() => {
         redraw = null;
         setFrame(live.current);
@@ -101,6 +127,85 @@ function App() {
       port.close().catch(() => {});
     };
   }, [port]);
+
+  function stopPlayback() {
+    if (playbackRef.current?.raf) cancelAnimationFrame(playbackRef.current.raf);
+    playbackRef.current = null;
+    setIsPlaying(false);
+  }
+
+  function startRecording() {
+    if (!port || !connected || isPlaying) return;
+    stopPlayback();
+    const startedAt = performance.now();
+    recordingRef.current = {
+      startedAt,
+      events: [{ t: 0, values: { ...live.current.values }, data: [] }],
+    };
+    setIsRecording(true);
+  }
+
+  function stopRecording() {
+    const active = recordingRef.current;
+    if (!active) return;
+    recordingRef.current = null;
+    setIsRecording(false);
+
+    const enteredName = window.prompt("Name this recording", "Untitled recording");
+    const recording = {
+      id: crypto.randomUUID(),
+      name: enteredName?.trim() || "Untitled recording",
+      createdAt: new Date().toISOString(),
+      durationMs: Math.max(0, Math.round(performance.now() - active.startedAt)),
+      events: active.events,
+    };
+    const next = [recording, ...recordings];
+    setRecordings(next);
+    setSelectedRecordingId(recording.id);
+    setLoadedRecording(recording);
+    localStorage.setItem(RECORDINGS_KEY, JSON.stringify(next));
+  }
+
+  function loadRecording() {
+    const recording = recordings.find(item => item.id === selectedRecordingId);
+    if (!recording) return;
+    stopPlayback();
+    setLoadedRecording(recording);
+    setFrame({ values: {} });
+  }
+
+  function playRecording() {
+    if (!loadedRecording || !loadedRecording.events.length || isRecording) return;
+    stopPlayback();
+    const playback = {
+      recording: loadedRecording,
+      startedAt: performance.now(),
+      eventIndex: 0,
+      values: {},
+      raf: null,
+    };
+    playbackRef.current = playback;
+    setFrame({ values: {} });
+    setIsPlaying(true);
+
+    const tick = now => {
+      if (playbackRef.current !== playback) return;
+      const elapsed = now - playback.startedAt;
+      while (playback.eventIndex < playback.recording.events.length
+        && playback.recording.events[playback.eventIndex].t <= elapsed) {
+        playback.values = playback.recording.events[playback.eventIndex].values;
+        playback.eventIndex += 1;
+      }
+      setFrame({ values: playback.values });
+      if (elapsed >= playback.recording.durationMs) {
+        playbackRef.current = null;
+        setIsPlaying(false);
+        return;
+      }
+      playback.raf = requestAnimationFrame(tick);
+    };
+    playback.raf = requestAnimationFrame(tick);
+  }
 
   async function connect() {
     setConnecting(true);
@@ -126,11 +231,27 @@ function App() {
     : port ? "Opening MIDI input…" : access ? "No MIDI input found. Check the USB data cable." : "Plug in your FLX4 to get started.");
 
   return <main className="console">
+    <div className="toolbar">
     <div className="connection">
         {ports.length > 1 && <select aria-label="MIDI input" value={selected} onChange={event => setSelected(event.target.value)}>
           {ports.map(input => <option key={input.id} value={input.id}>{input.name || "MIDI input"}</option>)}
         </select>}
-        <button onClick={access ? disconnect : connect} disabled={connecting}>{connecting ? "Requesting MIDI…" : access ? "Disconnect" : "Connect DDJ-FLX4"}</button>
+        <button className="connect-button" onClick={access ? disconnect : connect} disabled={connecting}>{connecting ? "Requesting MIDI…" : access ? "Disconnect" : "Connect DDJ-FLX4"}</button>
+    </div>
+      <div className="recording-controls">
+        <button className={isRecording ? "record-button recording" : "record-button"} onClick={isRecording ? stopRecording : startRecording} disabled={!isRecording && (!port || !connected || isPlaying)}>
+          {isRecording ? "Stop recording" : "Record"}
+        </button>
+        <select className="recording-select" aria-label="Saved recordings" value={selectedRecordingId} onChange={event => setSelectedRecordingId(event.target.value)} disabled={!recordings.length || isRecording}>
+          <option value="">Select recording</option>
+          {recordings.map(recording => <option key={recording.id} value={recording.id}>{recording.name}</option>)}
+        </select>
+        <button className="secondary-button" onClick={loadRecording} disabled={!selectedRecordingId || isRecording}>Load</button>
+        <button className="secondary-button" onClick={isPlaying ? stopPlayback : playRecording} disabled={!loadedRecording || isRecording}>
+          {isPlaying ? "Stop" : "Play"}
+        </button>
+        {loadedRecording && <span className="loaded-recording">{loadedRecording.name}</span>}
+      </div>
     </div>
     <div className="surface">
       <Deck side="a" values={values} />
