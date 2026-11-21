@@ -30,7 +30,16 @@ export interface CrowdHypeFrame {
   cueLine: number;
   celebration: { id: number; elapsed: number; duration: number } | null;
 }
-export interface GameplayScreenProps { source?: GameSource; rows?: Row[]; camera?: { c?: number; k?: number }; knobSmoothing?: number; show?: { venue?: boolean; crowd?: boolean; deck?: boolean; hud?: boolean; webcam?: boolean }; webcam?: MediaStream | HTMLVideoElement; webcamMirror?: boolean; getCrowdHype?(dt: number): CrowdHypeFrame; }
+export interface WebcamView {
+  width: number;
+  height: number;
+  drawWidth: number;
+  drawHeight: number;
+  left: number;
+  top: number;
+  mirror: boolean;
+}
+export interface GameplayScreenProps { source?: GameSource; rows?: Row[]; camera?: { c?: number; k?: number }; knobSmoothing?: number; show?: { venue?: boolean; crowd?: boolean; deck?: boolean; hud?: boolean; webcam?: boolean }; webcam?: MediaStream | HTMLVideoElement; webcamMirror?: boolean; getCrowdHype?(dt: number): CrowdHypeFrame; drawWebcamEffects?(ctx: CanvasRenderingContext2D, view: WebcamView, hype: CrowdHypeFrame | null, dt: number, reducedMotion: boolean): void; }
 export interface Screen {
   el: HTMLElement;
   knob(ev: KnobEvent): Turn | null;

@@ -432,14 +432,24 @@
     this.people = [];
     if (people) { this.people = people; return; }
     var rows = [{ y: 320, s: 0.62, n: 24, shade: 0.35 }, { y: 390, s: 0.85, n: 17, shade: 0.6 }, { y: 470, s: 1.15, n: 11, shade: 0.9 }];
-    if (expandable) rows.push({ y: 342, s: 0.69, n: 14, shade: 0.48, tier: 2 }, { y: 424, s: 0.95, n: 16, shade: 0.76, tier: 3 });
+    if (expandable) rows.push(
+      { y: 271, s: 0.46, n: 13, shade: 0.27, distant: true },
+      { y: 298, s: 0.53, n: 20, shade: 0.38, tier: 1, distant: true },
+      { y: 342, s: 0.69, n: 14, shade: 0.48, tier: 2 },
+      { y: 365, s: 0.70, n: 11, shade: 0.55, tier: 2, sides: true },
+      { y: 319, s: 0.59, n: 19, shade: 0.44, tier: 3, distant: true },
+      { y: 424, s: 0.95, n: 16, shade: 0.76, tier: 3 },
+      { y: 246, s: 0.42, n: 20, shade: 0.35, tier: 4, distant: true }
+    );
     rows.forEach(function (row) {
       for (var i = 0; i < row.n; i++) {
+        var lane = (i + 0.5 + (r() - 0.5) * 0.6) / row.n;
+        if (row.sides) lane = lane < 0.5 ? lane * 0.66 : 0.34 + lane * 0.66;
         self.people.push({
-          x: (i + 0.5 + (r() - 0.5) * 0.6) * W / row.n, y: row.y + (r() - 0.5) * 14, s: row.s * (0.88 + r() * 0.24),
+          x: lane * W, y: row.y + (r() - 0.5) * 14, s: row.s * (0.88 + r() * 0.24),
           shade: row.shade, armT: 0.12 + r() * 0.62, jumpT: 0.45 + r() * 0.4, ph: r() * 6.28, tone: r(), hair: r() < 0.45,
           arm: 0, jump: 0, oneArm: r() < 0.35, stick: r() < 0.45, stickCol: [C.laser, C.cyan, C.magenta, C.amber][(r() * 4) | 0],
-          tier: row.tier, opacity: row.tier ? 0 : 1
+          tier: row.tier, opacity: row.tier ? 0 : 1, distant: row.distant
         });
       }
     });
@@ -447,10 +457,14 @@
   }
   Crowd.prototype.update = function (dt, e, tier) {
     this.people.forEach(function (p) {
+      if (p.tier) {
+        var visible = tier >= p.tier;
+        p.opacity += ((visible ? 1 : 0) - p.opacity) * Math.min(1, dt * 3);
+        if (!visible && p.opacity < 0.015) return;
+      }
       var armTgt = e > p.armT ? 1 : 0, jumpTgt = e > p.jumpT || e > 0.88 ? 1 : 0;
       p.arm += (armTgt - p.arm) * Math.min(1, dt * 4);
       p.jump += (jumpTgt - p.jump) * Math.min(1, dt * 3);
-      if (p.tier) p.opacity += ((tier >= p.tier ? 1 : 0) - p.opacity) * Math.min(1, dt * 3);
     });
   };
   Crowd.prototype.draw = function (ctx, o) {
@@ -474,6 +488,18 @@
       var v = p.shade * (0.55 + 0.6 * e);
       var body = 'rgb(' + ((8 + 16 * v * (0.6 + p.tone * 0.4)) | 0) + ',' + ((6 + 8 * v) | 0) + ',' + ((14 + 20 * v) | 0) + ')';
       ctx.fillStyle = body;
+      if (p.distant) {
+        var faceY = base - 0.95 * h + bob;
+        ctx.fillRect(x - 0.14 * h, base - 0.73 * h, 0.28 * h, 0.66 * h);
+        ctx.fillRect(x - 0.1 * h, faceY - 0.09 * h, 0.2 * h, 0.19 * h);
+        var arms = Math.max(p.arm, cheer);
+        ctx.fillRect(x - 0.23 * h, base - (0.54 + 0.5 * arms) * h, 0.08 * h, 0.38 * h);
+        if (!p.oneArm || cheer > 0) ctx.fillRect(x + 0.15 * h, base - (0.54 + 0.55 * arms) * h, 0.08 * h, 0.38 * h);
+        ctx.fillStyle = hexA(rim[idx % 3], 0.30 + 0.28 * e);
+        ctx.fillRect(x - 0.1 * h, faceY - 0.09 * h, 0.2 * h, 3);
+        if (p.tier) ctx.restore();
+        return;
+      }
       poly(ctx, [[x - 0.11 * h, base - 0.38 * h], [x + 0.11 * h, base - 0.38 * h], [x + 0.08 * h, base + 4], [x - 0.08 * h, base + 4]]); ctx.fill();
       poly(ctx, [[x - 0.17 * h, base - 0.8 * h], [x + 0.17 * h, base - 0.8 * h], [x + 0.13 * h, base - 0.36 * h], [x - 0.13 * h, base - 0.36 * h]]); ctx.fill();
       ctx.strokeStyle = body; ctx.lineWidth = 0.075 * h; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -1030,7 +1056,7 @@
       ctx.fillText(s.mode === 'live' ? 'LIVE CONTROLLER' : s.mode === 'keys' ? 'KEYBOARD PLAY' : s.recordedMix ? 'MIX PREVIEW' : 'SAMPLE DATA  AUTOPLAY', W / 2, 92);
       ctx.restore();
     },
-    // video: an HTMLVideoElement (or null for the empty slot). o: {mirror, t}
+    // video: an HTMLVideoElement (or null for the empty slot).
     drawWebcam: function (ctx, video, o) {
       o = o || {}; var r = CAM, k;
       ctx.save();
@@ -1041,9 +1067,16 @@
         // cover-fit, mirrored like a selfie view so moving your hand left moves it left on screen
         var vw = video.videoWidth, vh = video.videoHeight, sc = Math.max(r.w / vw, r.h / vh), dw = vw * sc, dh = vh * sc;
         ctx.save();
-        if (o.mirror !== false) { ctx.translate(r.x + r.w, r.y); ctx.scale(-1, 1); ctx.drawImage(video, (r.w - dw) / 2, (r.h - dh) / 2, dw, dh); }
-        else ctx.drawImage(video, r.x + (r.w - dw) / 2, r.y + (r.h - dh) / 2, dw, dh);
+        var mirror = o.mirror !== false, left = (r.w - dw) / 2, top = (r.h - dh) / 2;
+        if (mirror) { ctx.translate(r.x + r.w, r.y); ctx.scale(-1, 1); ctx.drawImage(video, left, top, dw, dh); }
+        else ctx.drawImage(video, r.x + left, r.y + top, dw, dh);
         ctx.restore();
+        if (o.effects) {
+          ctx.save();
+          ctx.translate(r.x, r.y);
+          o.effects(ctx, { width: r.w, height: r.h, drawWidth: dw, drawHeight: dh, left: left, top: top, mirror: mirror }, o.hype, o.dt, o.reducedMotion);
+          ctx.restore();
+        }
         ctx.fillStyle = 'rgba(0,0,0,.12)'; for (k = r.y; k < r.y + r.h; k += 4) ctx.fillRect(r.x, k, r.w, 1);   // light scanlines
       } else {
         ctx.fillStyle = '#0d0a14'; ctx.fillRect(r.x, r.y, r.w, r.h);
@@ -1391,7 +1424,7 @@
       var excitement = hype ? (hype.celebration ? 1 : [energy, 0.43, 0.67, 0.94][hype.tier]) : energy;
       if (crowdEnergy === null) crowdEnergy = excitement;
       crowdEnergy += (excitement - crowdEnergy) * Math.min(1, dt * 3.2);
-      var crowdTier = hype && hype.celebration ? 3 : hype?.tier;
+      var crowdTier = hype?.celebration ? 4 : hype?.tier;
       crowd.update(dt, hype ? crowdEnergy : energy, crowdTier);
       fx.update(dt);
       eq.update(dt, f.audio || sampleAudio(f.time, bpm), tAbs);
@@ -1444,7 +1477,9 @@
       }
       fx.draw(s);
       if (show.hud) HUD.draw(s, { score: f.score, combo: f.combo, multiplier: f.multiplier, energy: energy, mode: f.mode, beat: beat, recordedMix: f.recordedMix, hasCrowdHype: Boolean(hype) });
-      if (show.hud && show.webcam !== false) HUD.drawWebcam(s, webcam, { mirror: webcamMirror, t: tAbs });
+      if (show.hud && show.webcam !== false) HUD.drawWebcam(s, webcam, {
+        mirror: webcamMirror, t: tAbs, effects: opts.drawWebcamEffects, hype: hype, dt: dt, reducedMotion: reducedMotion
+      });
       if (show.hud && hype) {
         drawHypeMeter(s, hype);
         drawHypeTempo(s, hype);
