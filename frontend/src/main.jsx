@@ -50,7 +50,7 @@ function Knob({ label, value, targetValue, highlighted = false }) {
 function Deck({ side, values, targetValues, cueControls = new Set() }) {
   const read = control => values[side + "." + control];
   const readTarget = control => targetValues?.[side + "." + control];
-  const transport = [["cue", "CUE"], ["play", "▶ PLAY"]];
+  const transport = [["play", "PLAY"]];
   return <section className={"deck " + side} aria-label="Deck controls">
     <div className="deck-heading">
       <div className="loop-buttons" aria-label="Loop controls">
@@ -95,6 +95,7 @@ function App() {
   const [mixManifest, setMixManifest] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [hologramDelayMs, setHologramDelayMs] = useState(-4000);
   const [targetValues, setTargetValues] = useState({});
   const [cueControls, setCueControls] = useState(new Set());
   const [isChallenging, setIsChallenging] = useState(false);
@@ -105,6 +106,12 @@ function App() {
   const challengeRef = useRef(null);
   const targetPlaybackRef = useRef(null);
   const audioEngineRef = useRef(null);
+  const startChallengeRef = useRef(null);
+  const hologramDelayRef = useRef(0);
+
+  useEffect(() => {
+    hologramDelayRef.current = hologramDelayMs;
+  }, [hologramDelayMs]);
 
   useEffect(() => {
     let active = true;
@@ -121,9 +128,9 @@ function App() {
           name: "mix1",
         };
         setRecordings(current => {
-          const next = current.some(item => item.id === mix1.id)
-            ? current.map(item => item.id === mix1.id ? mix1 : item)
-            : [mix1, ...current];
+          const next = [mix1, ...current.filter(item =>
+            item.id !== mix1.id && item.name?.trim().toLowerCase() !== "mix1"
+          )];
           localStorage.setItem(RECORDINGS_KEY, JSON.stringify(next));
           return next;
         });
@@ -174,27 +181,43 @@ function App() {
       const { values } = live.current;
       const changes = decodeMidi(bytes, values);
       const nextValues = { ...values, ...changes };
-      live.current = {
-        values: nextValues,
-      };
-      audioEngineRef.current?.update(nextValues);
+      const leftJogDelta = changes["a.jog"] === undefined
+        ? 0
+        : changes["a.jog"] - (values["a.jog"] ?? 0);
+      const rightJogDelta = changes["b.jog"] === undefined
+        ? 0
+        : changes["b.jog"] - (values["b.jog"] ?? 0);
+      const leftJogTrigger = leftJogDelta < -0.05;
+      const rightJogTrigger = rightJogDelta > 0.05;
+      let eventValues = nextValues;
+      let startedChallenge = false;
+      if (leftJogTrigger) eventValues = { ...eventValues, "a.play": true };
+      if (rightJogTrigger) eventValues = { ...eventValues, "b.play": true };
+      live.current = { values: eventValues };
+      audioEngineRef.current?.update(eventValues);
       for (const deck of ["a", "b"]) {
         const playKey = deck + ".play";
         if (Object.prototype.hasOwnProperty.call(changes, playKey)) {
-          audioEngineRef.current?.setPlaying(deck, Boolean(nextValues[playKey])).catch(() => {});
+          audioEngineRef.current?.setPlaying(deck, Boolean(eventValues[playKey])).catch(() => {});
         }
+      }
+      if (leftJogTrigger) audioEngineRef.current?.setPlaying("a", true).catch(() => {});
+      if (rightJogTrigger) audioEngineRef.current?.setPlaying("b", true).catch(() => {});
+      if (!challengeRef.current && leftJogTrigger && startChallengeRef.current) {
+        startChallengeRef.current("a", eventValues, bytes, performance.now());
+        startedChallenge = true;
       }
       if (recordingRef.current) {
         recordingRef.current.events.push({
           t: performance.now() - recordingRef.current.startedAt,
-          values: nextValues,
+          values: eventValues,
           data: bytes,
         });
       }
-      if (challengeRef.current) {
+      if (challengeRef.current && !startedChallenge) {
         challengeRef.current.events.push({
           t: performance.now() - challengeRef.current.startedAt,
-          values: nextValues,
+          values: eventValues,
           data: bytes,
         });
       }
@@ -219,7 +242,11 @@ function App() {
 
   function stopPlayback() {
     if (playbackRef.current?.raf) cancelAnimationFrame(playbackRef.current.raf);
+    if (targetPlaybackRef.current === playbackRef.current) targetPlaybackRef.current = null;
     playbackRef.current = null;
+    audioEngineRef.current?.stop();
+    setTargetValues({});
+    setCueControls(new Set());
     setIsPlaying(false);
   }
 
@@ -282,28 +309,46 @@ function App() {
   function playRecording() {
     if (!loadedRecording || !loadedRecording.events.length || isRecording) return;
     stopPlayback();
+    audioEngineRef.current?.startBoth().catch(error => setMessage("Audio could not start: " + error.message));
     const playback = {
       recording: loadedRecording,
       startedAt: performance.now(),
       eventIndex: 0,
       values: {},
+      lastReferenceTime: 0,
       raf: null,
     };
     playbackRef.current = playback;
+    targetPlaybackRef.current = playback;
     setFrame({ values: {} });
     setIsPlaying(true);
 
     const tick = now => {
       if (playbackRef.current !== playback) return;
       const elapsed = now - playback.startedAt;
+      const referenceTime = Math.max(0, Math.min(
+        playback.recording.durationMs,
+        elapsed - hologramDelayRef.current,
+      ));
+      if (referenceTime < playback.lastReferenceTime) {
+        playback.eventIndex = 0;
+        playback.values = {};
+      }
       while (playback.eventIndex < playback.recording.events.length
-        && playback.recording.events[playback.eventIndex].t <= elapsed) {
+        && playback.recording.events[playback.eventIndex].t <= referenceTime) {
         playback.values = playback.recording.events[playback.eventIndex].values;
         playback.eventIndex += 1;
       }
+      playback.lastReferenceTime = referenceTime;
       setFrame({ values: playback.values });
+      setTargetValues(playback.values);
+      setCueControls(upcomingContinuousControls(playback.recording.events, referenceTime));
       if (elapsed >= playback.recording.durationMs) {
         playbackRef.current = null;
+        targetPlaybackRef.current = null;
+        audioEngineRef.current?.stop();
+        setTargetValues({});
+        setCueControls(new Set());
         setIsPlaying(false);
         return;
       }
@@ -332,22 +377,22 @@ function App() {
     }));
   }
 
-  function startChallenge() {
+  function startChallenge(startDeck = "a", initialValues = live.current.values, initialData = [], startedAt = performance.now()) {
     if (!loadedRecording || !loadedRecording.events.length || !port || !connected || isRecording || isPlaying) return;
     stopPlayback();
-    audioEngineRef.current?.startBoth().catch(error => setMessage("Audio could not start: " + error.message));
+    audioEngineRef.current?.setPlaying(startDeck, true).catch(error => setMessage("Audio could not start: " + error.message));
     setScoreResult(null);
     setIsChallenging(true);
     setCueControls(new Set());
-    const startedAt = performance.now();
     challengeRef.current = {
       startedAt,
-      events: [{ t: 0, values: { ...live.current.values }, data: [] }],
+      events: [{ t: 0, values: { ...initialValues }, data: initialData }],
     };
     const targetPlayback = {
       startedAt,
       eventIndex: 0,
       values: {},
+      lastReferenceTime: 0,
       raf: null,
     };
     targetPlaybackRef.current = targetPlayback;
@@ -355,13 +400,22 @@ function App() {
     const tick = now => {
       if (targetPlaybackRef.current !== targetPlayback) return;
       const elapsed = now - targetPlayback.startedAt;
+      const referenceTime = Math.max(0, Math.min(
+        loadedRecording.durationMs,
+        elapsed - hologramDelayRef.current,
+      ));
+      if (referenceTime < targetPlayback.lastReferenceTime) {
+        targetPlayback.eventIndex = 0;
+        targetPlayback.values = {};
+      }
       while (targetPlayback.eventIndex < loadedRecording.events.length
-        && loadedRecording.events[targetPlayback.eventIndex].t <= elapsed) {
+        && loadedRecording.events[targetPlayback.eventIndex].t <= referenceTime) {
         targetPlayback.values = loadedRecording.events[targetPlayback.eventIndex].values;
         targetPlayback.eventIndex += 1;
       }
+      targetPlayback.lastReferenceTime = referenceTime;
       setTargetValues(targetPlayback.values);
-      setCueControls(upcomingContinuousControls(loadedRecording.events, elapsed));
+      setCueControls(upcomingContinuousControls(loadedRecording.events, referenceTime));
       if (elapsed >= loadedRecording.durationMs) {
         finishChallenge();
         return;
@@ -370,6 +424,8 @@ function App() {
     };
     targetPlayback.raf = requestAnimationFrame(tick);
   }
+
+  startChallengeRef.current = startChallenge;
 
   async function connect() {
     setConnecting(true);
@@ -397,7 +453,7 @@ function App() {
   const { values } = frame;
   const challengeStatus = isChallenging
     ? "Challenge live - Deck Relay is mixing the songs."
-    : "App audio ready - Rekordbox is not required.";
+    : "Spin the left jog wheel counter-clockwise to start mix1.";
   const status = message || (connected ? "Listening to " + (port?.name || "MIDI input")
     : port ? "Opening MIDI input…" : access ? "No MIDI input found. Check the USB data cable." : "Plug in your FLX4 to get started.");
 
@@ -420,15 +476,18 @@ function App() {
         <button className="secondary-button" onClick={loadRecording} disabled={!selectedRecordingId || isRecording || isChallenging}>Load</button>
         <button className="secondary-button" onClick={saveRecordingToComputer} disabled={(!loadedRecording && !selectedRecordingId) || isRecording || isChallenging}>Save file</button>
         <button className="secondary-button" onClick={isPlaying ? stopPlayback : playRecording} disabled={!loadedRecording || isRecording || isChallenging}>
-          {isPlaying ? "Stop" : "Play"}
+          {isPlaying ? "Stop demo" : "Demo"}
         </button>
-        <button className="challenge-button" onClick={isChallenging ? finishChallenge : startChallenge} disabled={!isChallenging && (!loadedRecording || !port || !connected || isRecording || isPlaying)}>
-          {isChallenging ? "Finish challenge" : "Start challenge"}
-        </button>
+        {isChallenging && <button className="challenge-button" onClick={finishChallenge}>Finish challenge</button>}
         {loadedRecording && <span className="loaded-recording">{loadedRecording.name}</span>}
       </div>
     </div>
     <div className="status"><span className={connected ? "online" : ""} /><span>{status}</span><strong className="challenge-status">{challengeStatus}</strong></div>
+    <div className="alignment-control">
+      <label htmlFor="alignment-offset">Hologram delay <output>{hologramDelayMs > 0 ? "+" : ""}{hologramDelayMs} ms</output></label>
+      <input id="alignment-offset" type="range" min="-60000" max="60000" step="10" value={hologramDelayMs} onChange={event => setHologramDelayMs(Number(event.target.value))} />
+      <span>Negative = earlier, positive = later</span>
+    </div>
     {mixManifest && <div className="track-strip" aria-label="Mix tracks">
       <span><b>A</b>{mixManifest.deckA.artist} — {mixManifest.deckA.title}</span>
       <span><b>B</b>{mixManifest.deckB.artist} — {mixManifest.deckB.title}</span>

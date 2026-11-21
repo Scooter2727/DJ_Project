@@ -1,18 +1,16 @@
 const BUTTON_CONTROLS = new Set([
-  "a.sync", "a.loopIn", "a.loopOut", "a.cue", "a.play",
-  "b.sync", "b.loopIn", "b.loopOut", "b.cue", "b.play",
+  "a.sync", "a.loopIn", "a.loopOut", "a.play",
+  "b.sync", "b.loopIn", "b.loopOut", "b.play",
 ]);
 
 const CONTINUOUS_CONTROLS = [
-  "a.trim", "a.high", "a.mid", "a.low", "a.cfx", "a.tempo", "a.volume",
-  "b.trim", "b.high", "b.mid", "b.low", "b.cfx", "b.tempo", "b.volume",
+  "a.trim", "a.high", "a.mid", "a.low", "a.cfx", "a.tempo",
+  "b.trim", "b.high", "b.mid", "b.low", "b.cfx", "b.tempo",
   "mixer.crossfade", "a.jog", "b.jog",
 ];
 
 const CONTROL_WEIGHTS = {
   "mixer.crossfade": 1.4,
-  "a.volume": 1.2,
-  "b.volume": 1.2,
   "a.low": 1.1,
   "b.low": 1.1,
 };

@@ -52,9 +52,10 @@ export class MixAudioEngine {
 
   update(values) {
     const crossfade = normalized(values["mixer.crossfade"]);
-    const angle = crossfade * Math.PI / 2;
-    smooth(this.nodes.a.volume.gain, Math.cos(angle), this.context);
-    smooth(this.nodes.b.volume.gain, Math.sin(angle), this.context);
+    const deckAGain = crossfade <= 0.5 ? 1 : 2 * (1 - crossfade);
+    const deckBGain = crossfade >= 0.5 ? 1 : 2 * crossfade;
+    smooth(this.nodes.a.volume.gain, deckAGain, this.context);
+    smooth(this.nodes.b.volume.gain, deckBGain, this.context);
 
     for (const deck of ["a", "b"]) {
       const nodes = this.nodes[deck];
@@ -62,7 +63,6 @@ export class MixAudioEngine {
       const low = normalized(values[deck + ".low"]);
       const mid = normalized(values[deck + ".mid"]);
       const high = normalized(values[deck + ".high"]);
-      const volume = normalized(values[deck + ".volume"]);
       const cfx = normalized(values[deck + ".cfx"]);
 
       smooth(nodes.trim.gain, 0.55 + trim * 0.9, this.context);
@@ -77,7 +77,6 @@ export class MixAudioEngine {
         nodes.cfx.type = "highpass";
         smooth(nodes.cfx.frequency, 25 * Math.pow(9000 / 25, (cfx - 0.5) * 2), this.context);
       }
-      smooth(nodes.volume.gain, volume, this.context);
     }
   }
 

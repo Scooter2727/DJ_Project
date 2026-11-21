@@ -18,8 +18,8 @@ If the controller does not appear, check that the cable supports data. If the MI
 
 ## In-app audio challenge mode
 
-Deck Relay loads the two bundled `mix1` tracks into its own Web Audio mixer. Rekordbox is not required. Connect the FLX4, load `mix1`, and click **Start challenge**. The app starts both tracks, applies the FLX4's channel volume, EQ, CFX, and crossfader controls to the audio, and scores the live performance against the reference timeline.
+Deck Relay loads the two bundled `mix1` tracks into its own Web Audio mixer. Rekordbox is not required. Connect the FLX4 and load `mix1`. Spin the left jog wheel counter-clockwise to start Deck A and begin the challenge; spin the right jog wheel clockwise to start Deck B. Jog starts are recorded as Play inputs. The crossfader controls the blend between the two tracks, while EQ and CFX shape each deck. The app scores the live performance against the reference timeline.
 
-The bundled `mix1` sources are `frontend/public/mixes/mix1/deck-a.mp3` (Alesso — *Heroes (we could be)*) and `frontend/public/mixes/mix1/deck-b.mp3` (Avicii — *Levels (Radio Edit)*). Load those same files into Rekordbox for the challenge.
+The bundled `mix1` sources are `frontend/public/mixes/mix1/deck-a.mp3` (Alesso — *Heroes (we could be)*) and `frontend/public/mixes/mix1/deck-b.mp3` (Avicii — *Levels (Radio Edit)*).
 
 The display follows MIDI messages as controls move. A dash means the app has yet to receive a value for that control. The Play indicator toggles with Play presses. Jog wheels remain available for the game layer and can be mapped to scratching or seeking later.

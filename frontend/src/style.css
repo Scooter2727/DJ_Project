@@ -33,6 +33,11 @@ select { background: #222733; border: 1px solid #42495c; }
 .status > span { width: 8px; height: 8px; border-radius: 50%; background: #778298; flex: none; }
 .status > .online { background: #dbfa93; box-shadow: 0 0 10px #dbfa9366; }
 .challenge-status { margin-left: auto; color: #c4b5fd; font-size: .76rem; font-weight: 700; }
+.alignment-control { display: grid; grid-template-columns: auto minmax(220px, 1fr) auto; align-items: center; gap: 10px; margin: -2px 0 16px; padding: 10px 12px; border: 1px solid #303747; border-radius: 10px; background: #121620; color: #aeb8ca; font-size: .76rem; }
+.alignment-control label { display: flex; gap: 8px; align-items: center; font-weight: 750; }
+.alignment-control output { color: #c4b5fd; font: 800 .74rem ui-monospace, monospace; }
+.alignment-control input { width: 100%; accent-color: #a78bfa; }
+.alignment-control > span { color: #778298; font-size: .7rem; }
 .track-strip { display: flex; gap: 10px; flex-wrap: wrap; margin: -4px 0 18px; color: #aeb8ca; font-size: .78rem; }
 .track-strip span { display: inline-flex; align-items: center; gap: 7px; padding: 7px 10px; border: 1px solid #303747; border-radius: 9px; background: #151923; }
 .track-strip span:first-child b { color: #6de8fb; }
@@ -61,7 +66,7 @@ select { background: #222733; border: 1px solid #42495c; }
 .disc-label { width: 35%; aspect-ratio: 1; border: 1px solid var(--accent); background: #1b2230; border-radius: 50%; display: grid; place-items: center; color: var(--accent); }
 .disc-label strong { font-size: clamp(16px, 3vw, 31px); }
 .transport, .pads { display: grid; gap: 7px; }
-.transport { grid-template-columns: repeat(2, 1fr); }
+.transport { grid-template-columns: 1fr; }
 .pads { grid-template-columns: repeat(4, 1fr); }
 .transport span, .pads span { display: grid; place-items: center; background: #282e3a; border: 1px solid #41485a; border-bottom-width: 3px; border-radius: 7px; min-height: 37px; color: #c4cada; font: 700 .73rem ui-monospace, monospace; }
 .transport .lit, .pads .lit { background: var(--accent); border-color: var(--accent); color: #111720; }
