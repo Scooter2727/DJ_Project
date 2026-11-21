@@ -15,6 +15,11 @@ export class MixAudioEngine {
       b: new Audio(deckB),
     };
     this.nodes = {};
+    this.analyser = this.context.createAnalyser();
+    this.analyser.fftSize = 1024;
+    this.spectrum = new Uint8Array(this.analyser.frequencyBinCount);
+    this.playRequests = { a: 0, b: 0 };
+    this.analyser.connect(this.context.destination);
 
     for (const deck of ["a", "b"]) {
       const player = this.players[deck];
@@ -40,7 +45,7 @@ export class MixAudioEngine {
       cfx.type = "lowpass";
       cfx.frequency.value = 20000;
 
-      source.connect(trim).connect(low).connect(mid).connect(high).connect(cfx).connect(volume).connect(this.context.destination);
+      source.connect(trim).connect(low).connect(mid).connect(high).connect(cfx).connect(volume).connect(this.analyser);
       this.nodes[deck] = { trim, low, mid, high, cfx, volume };
       volume.gain.value = 0;
     }
@@ -81,7 +86,9 @@ export class MixAudioEngine {
   }
 
   async setPlaying(deck, playing) {
+    const request = ++this.playRequests[deck];
     await this.resume();
+    if (request !== this.playRequests[deck]) return;
     const player = this.players[deck];
     if (playing) {
       if (player.paused) await player.play();
@@ -95,10 +102,28 @@ export class MixAudioEngine {
     await Promise.all([this.players.a.play(), this.players.b.play()]);
   }
 
+  pause(deck) {
+    this.playRequests[deck]++;
+    this.players[deck].pause();
+  }
+
   stop() {
-    for (const player of Object.values(this.players)) {
-      player.pause();
+    for (const [deck, player] of Object.entries(this.players)) {
+      this.pause(deck);
       player.currentTime = 0;
     }
+  }
+
+  audioFrame() {
+    this.analyser.getByteFrequencyData(this.spectrum);
+    const hzPerBin = this.context.sampleRate / this.analyser.fftSize;
+    const bands = Array.from({ length: 16 }, (_, i) => {
+      const start = Math.floor(45 * 2 ** (i / 2) / hzPerBin);
+      const end = Math.min(this.spectrum.length, Math.max(start + 1, Math.floor(45 * 2 ** ((i + 1) / 2) / hzPerBin)));
+      let total = 0;
+      for (let bin = start; bin < end; bin++) total += this.spectrum[bin];
+      return total / (255 * Math.max(1, end - start));
+    });
+    return { bands, kick: bands[1], bass: bands[4], hats: bands[14], energy: bands.reduce((a, b) => a + b) / bands.length };
   }
 }

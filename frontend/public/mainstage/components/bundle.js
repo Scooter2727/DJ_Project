@@ -71,32 +71,44 @@
   // ---------------------------------------------------------------- layout + camera
   // The deck is authored flat (top-down, "flat" coords) and shown through a shallow
   // three-quarter camera: front edge close, back edge receding. P() is a true perspective
-  // map (straight lines stay straight, horizontal lines stay horizontal), so every lane
-  // lines up with the projected knob row it belongs to.
+  // map. Each vertical lane ends at the projected centre of its knob's raised face.
+  var DECK_EXTENSION = 275;
   function makeLayout(opts) {
     opts = opts || {};
     var rows = ROWS.filter(function (r) { return !opts.rows || opts.rows.indexOf(r) >= 0; });
-    var pitch = opts.rowPitch || 64, flatRowY = {};
+    var pitch = opts.rowPitch || 78, flatRowY = {};
     ROWS.forEach(function (r, i) { flatRowY[r] = 440 + i * pitch; });
     var cam = Object.assign({ cx: 800, front: 910, D: 530, Yf: 885, c: 0.9, k: 0.2 }, opts.camera || {});
     function P(x, y) { var v = cam.front - y, s = 1 / (1 + cam.k * v / cam.D); return { x: cam.cx + (x - cam.cx) * s, y: cam.Yf - v * cam.c * s, s: s }; }
     function unY(yp) { var u = (cam.Yf - yp) / cam.c, v = u / (1 - cam.k * u / cam.D); return { y: cam.front - v, s: 1 / (1 + cam.k * v / cam.D) }; }
-    var flat = { deck: { x: 370, y: 380, w: 860, h: 530, r: 24 }, knobX: { 1: 760, 2: 840 }, knobR: 20, rowY: flatRowY, deckOffset: { 1: 0, 2: 580 } };
-    var knobH = 8, rowY = {}, knob = {}, marker = { 1: {}, 2: {} };
-    ROWS.forEach(function (r) {
-      [1, 2].forEach(function (ch) { knob[key(ch, r)] = P(flat.knobX[ch], flatRowY[r]); });
-      var c = knob[key(1, r)], pl = P(flat.deck.x, flatRowY[r]), pr = P(flat.deck.x + flat.deck.w, flatRowY[r]);
-      rowY[r] = c.y - knobH * c.s;   // lanes meet the knob top, where the pointer pivots
-      marker[1][r] = pl.x - 40; marker[2][r] = pr.x + 40;
+    var flat = {
+      deck: { x: 370 - DECK_EXTENSION, y: 380, w: 860 + 2 * DECK_EXTENSION, h: 530, r: 24 },
+      knobX: { 1: {}, 2: {} }, knobR: 20, rowY: flatRowY,
+      deckOffset: { 1: -DECK_EXTENSION, 2: 580 + DECK_EXTENSION }
+    };
+    var knobH = 8, lanes = { 1: {}, 2: {} };
+    ROWS.forEach(function (row, index) {
+      [1, 2].forEach(function (ch) {
+        var outward = ch === 1 ? -1 : 1;
+        var x = 800 + outward * (76 + index * 60);
+        flat.knobX[ch][row] = x;
+        var centre = P(x, flatRowY[row]);
+        lanes[ch][row] = { x: centre.x, hitY: centre.y - knobH * centre.s };
+      });
     });
     return {
-      W: W, H: H, rows: rows, rowY: rowY, flat: flat, P: P, unY: unY, cam: cam, knob: knob, knobH: knobH,
-      marker: marker, spawnX: { 1: -40, 2: 1640 }, laneH: 34, noteR: 19, markerR: 19
+      W: W, H: H, rows: rows, flat: flat, P: P, unY: unY, cam: cam, knobH: knobH,
+      lanes: lanes, spawnY: -24, laneWidth: 40, noteR: 19, markerR: 24
     };
   }
-  function noteX(L, ch, row, dt, approach) {
-    var f = dt / approach, m = L.marker[ch][row];
-    return ch === 1 ? m - f * (m - L.spawnX[1]) : m + f * (L.spawnX[2] - m);
+  function noteY(L, lane, timeUntilHit, approach) {
+    return lerp(lane.hitY, L.spawnY, clamp(timeUntilHit / approach, 0, 1));
+  }
+  function traceOffset(trace, fraction, width) {
+    if (!trace) return 0;
+    var index = clamp(fraction, 0, 1) * (trace.length - 1), i = Math.floor(index);
+    var turn = lerp(trace[i], trace[Math.min(i + 1, trace.length - 1)], index - i);
+    return Math.tanh(turn * 5) * (width / 2 - 5);
   }
   // a flat circle on the deck plane, lifted by `lift` px (knob height), as a projected path
   function planeCircle(ctx, L, cx, cy, r, lift, a0, a1, ccw) {
@@ -517,7 +529,7 @@
   // not use are drawn "soft": each one blurred and lowered in contrast on its own, so the mapped
   // knobs next to them stay crisp. Mapped knobs themselves are drawn sharp in drawOverlay.
   var SOFT = 'blur(0.7px) saturate(0.6) contrast(0.7) brightness(0.85)';
-  var FX0 = 330, FY0 = 370, FWL = 940, FHL = 560;
+  var FX0 = 330 - DECK_EXTENSION, FY0 = 370, FWL = 940 + 2 * DECK_EXTENSION, FHL = 560;
   var _flat = null;
   function flatCanvas() {
     if (_flat) return _flat;
@@ -580,25 +592,35 @@
     if (o.eq) o.eq.drawBank(ctx, 446 + ox, 752, 158, 98, 8, 8, side === 2);
   }
   function mixerFlat(ctx, L, o) {
-    var bp = o.beat - Math.floor(o.beat), k, F = L.flat;
-    ctx.fillStyle = '#1d1c21'; ctx.fillRect(722, 420, 156, 300);
+    var F = L.flat;
+    [1, 2].forEach(function (ch) {
+      var x = F.knobX[ch], y = F.rowY;
+      ctx.fillStyle = '#24232b';
+      ctx.strokeStyle = '#44414e'; ctx.lineWidth = 2;
+      poly(ctx, [[x.TRIM - 36, y.TRIM - 34], [x.TRIM + 36, y.TRIM - 34],
+        [x.CFX + 36, y.CFX + 40], [x.CFX - 36, y.CFX + 40]]);
+      ctx.fill(); ctx.stroke();
+    });
     soft(ctx, function (ctx) {
       ctx.fillStyle = '#121115'; ctx.fillRect(747, 390, 26, 18); ctx.fillRect(827, 390, 26, 18);
       knobLow(ctx, 800, 400, 13);
+      ctx.save(); ctx.translate(-DECK_EXTENSION, 0);
       knobLow(ctx, 688, 440, 12); btnLow(ctx, 688, 500, 11, '#151418', '#8c7a5a');
       knobLow(ctx, 688, 560, 11); knobLow(ctx, 688, 620, 11); btnLow(ctx, 688, 690, 11, '#151418', '#8c7a5a');
+      ctx.restore(); ctx.save(); ctx.translate(DECK_EXTENSION, 0);
       knobLow(ctx, 912, 440, 12);
       ctx.strokeStyle = C.amber; ctx.lineWidth = 3; ctx.strokeRect(899, 476, 26, 14);
       ctx.fillStyle = '#0c0b0f'; ctx.fillRect(904, 512, 16, 30);
       ctx.fillStyle = '#131216'; ctx.fillRect(897, 562, 13, 13); ctx.fillRect(914, 562, 13, 13);
       knobLow(ctx, 912, 620, 12);
       btnLow(ctx, 912, 690, 13, hexA(C.amber, o.fxOn ? 1 : 0.35));
+      ctx.restore();
     });
     // row knobs: mapped rows get only a socket (the knob is drawn sharp on top); unmapped rows are soft
     ROWS.forEach(function (r) {
       var on = L.rows.indexOf(r) >= 0;
       [1, 2].forEach(function (ch) {
-        var x = F.knobX[ch], y = F.rowY[r];
+        var x = F.knobX[ch][r], y = F.rowY[r];
         if (on) { ctx.fillStyle = '#0b0a0d'; circ(ctx, x, y + 2, F.knobR + 4); ctx.fill(); }
         else soft(ctx, function (ctx) { knobLow(ctx, x, y, F.knobR); });
       });
@@ -628,7 +650,7 @@
       f.fillStyle = g; rr(f, d.x, d.y, d.w, d.h, d.r); f.fill();
       texture(f, d.x, d.y, d.w, d.h, 0.18);
       f.strokeStyle = '#4a4952'; f.lineWidth = 4; rr(f, d.x + 2, d.y + 2, d.w - 4, d.h - 4, d.r); f.stroke();
-      f.fillStyle = '#17161a'; f.fillRect(648, d.y + 10, 4, d.h - 20); f.fillRect(948, d.y + 10, 4, d.h - 20);
+      f.fillStyle = '#17161a'; f.fillRect(648 - DECK_EXTENSION, d.y + 10, 4, d.h - 20); f.fillRect(948 + DECK_EXTENSION, d.y + 10, 4, d.h - 20);
       deckHalf(f, L.flat.deckOffset[1], o, 1); deckHalf(f, L.flat.deckOffset[2], o, 2);
       mixerFlat(f, L, o);
       f.save(); f.setTransform(1, 0, 0, 1, 0, 0);
@@ -667,14 +689,14 @@
     drawOverlay: function (ctx, L, knobs, now) {
       var F = L.flat, R = F.knobR, H = L.knobH;
       ctx.save(); ctx.lineJoin = 'round';
-      ctx.font = '9px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.font = '12px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ROWS.forEach(function (row) {
         var on = L.rows.indexOf(row) >= 0, fy = F.rowY[row];
-        var lp = L.P(800, fy);
-        ctx.fillStyle = on ? C.creamDim : hexA(C.creamDim, 0.3); ctx.fillText(row, lp.x, lp.y - 2);
-        if (!on) return;
         [1, 2].forEach(function (ch) {
-          var k = knobs[key(ch, row)] || {}, fx = F.knobX[ch];
+          var k = knobs[key(ch, row)] || {}, fx = F.knobX[ch][row], lane = L.lanes[ch][row];
+          ctx.fillStyle = on ? C.cream : hexA(C.creamDim, 0.4);
+          ctx.fillText(row, lane.x, lane.hitY + 35);
+          if (!on) return;
           // body: stacked rims give the cylinder side, then a flat stepped top
           for (var h = 0; h <= H; h += 2) { planeCircle(ctx, L, fx, fy, R, h); ctx.fillStyle = h === 0 ? '#08070a' : '#16151a'; ctx.fill(); }
           planeCircle(ctx, L, fx, fy, R, H); ctx.fillStyle = '#2a2930'; ctx.fill();
@@ -749,9 +771,9 @@
       o = o || {}; var r = o.r || 21;
       ctx.save(); ctx.globalAlpha = o.alpha == null ? 1 : o.alpha; ctx.translate(x, y);
       if (o.tail) {
-        var s = o.side === 2 ? 1 : -1, g = ctx.createLinearGradient(0, 0, s * 110, 0);
+        var g = ctx.createLinearGradient(0, 0, 0, -90);
         g.addColorStop(0, hexA(C.cream, 0.3)); g.addColorStop(1, hexA(C.cream, 0));
-        ctx.fillStyle = g; ctx.fillRect(s < 0 ? -110 : 0, -6, 110, 12);
+        ctx.fillStyle = g; ctx.fillRect(-5, -90, 10, 90);
       }
       ctx.fillStyle = 'rgba(0,0,0,.6)'; circ(ctx, 0, 3, r + 3); ctx.fill();
       var arrowCol;
@@ -769,9 +791,7 @@
     draw: function (ctx, x, y, s) {
       s = s || {}; var r = s.r || 22, ready = s.ready || 0, k;
       ctx.save();
-      ctx.fillStyle = 'rgba(11,8,20,.75)'; circ(ctx, x, y, r + 2); ctx.fill();
-      ctx.strokeStyle = hexA(C.cream, 0.5 + 0.5 * ready); ctx.lineWidth = 3; circ(ctx, x, y, r); ctx.stroke();
-      ctx.strokeStyle = hexA(C.cream, 0.18); ctx.lineWidth = 2; circ(ctx, x, y, r - 7); ctx.stroke();
+      ctx.strokeStyle = hexA(s.side === 1 ? C.magenta : C.cyan, 0.55 + 0.45 * ready); ctx.lineWidth = 2; circ(ctx, x, y, r); ctx.stroke();
       ctx.strokeStyle = hexA(C.cream, 0.6 + 0.4 * ready); ctx.lineWidth = 3; ctx.beginPath();
       for (k = 0; k < 4; k += 2) { var a = k * Math.PI / 2; ctx.moveTo(x + Math.cos(a) * (r + 3), y + Math.sin(a) * (r + 3)); ctx.lineTo(x + Math.cos(a) * (r + 6), y + Math.sin(a) * (r + 6)); }
       ctx.stroke();
@@ -804,7 +824,7 @@
       }
       var label = f.j === 'perfect' ? 'PERFECT' : f.j === 'good' ? 'GOOD' : 'MISS';
       var ta = t < 0.5 ? 1 : 1 - (t - 0.5) / 0.25, sc = t < 0.08 ? 1.3 - t / 0.08 * 0.3 : 1;
-      var tx = f.x + (f.side === 1 ? -92 : 92), ty = f.y - 28 - t * 22;
+      var tx = f.x, ty = f.y + 55 + t * 16;
       ctx.save(); ctx.translate(tx, ty); ctx.scale(sc, sc); ctx.globalAlpha = clamp(ta, 0, 1);
       ctx.font = '16px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
       ctx.strokeStyle = C.void; ctx.lineWidth = 6; ctx.strokeText(label, 0, 0); ctx.fillStyle = col; ctx.fillText(label, 0, 0);
@@ -816,56 +836,50 @@
 
   // ---------------------------------------------------------------- NoteLanes (sharp)
   var NoteLanes = {
-    // o: {time (song s), approach, spb}
     draw: function (ctx, L, o) {
-      var rows = L.rows; if (!rows.length) return;
+      var width = L.laneWidth;
       ctx.save();
-      rows.forEach(function (row) {
-        var y = L.rowY[row], h = L.laneH;
-        [1, 2].forEach(function (ch) {
-          var m = L.marker[ch][row], xa = ch === 1 ? 0 : m, xb = ch === 1 ? m : W;
-          var g = ctx.createLinearGradient(ch === 1 ? 0 : W, 0, m, 0);
-          g.addColorStop(0, 'rgba(11,8,20,0.1)'); g.addColorStop(0.3, 'rgba(11,8,20,.6)'); g.addColorStop(1, 'rgba(11,8,20,.85)');
-          ctx.fillStyle = g; ctx.fillRect(xa, y - h / 2, xb - xa, h);
-          var gl = ctx.createLinearGradient(ch === 1 ? 0 : W, 0, m, 0);
-          gl.addColorStop(0, hexA(C.cream, 0.05)); gl.addColorStop(1, hexA(C.cream, 0.4));
-          var gn = ctx.createLinearGradient(ch === 1 ? 0 : W, 0, m, 0);
-          gn.addColorStop(0, hexA(C.violet, 0.05)); gn.addColorStop(1, hexA(ch === 1 ? C.magenta : C.cyan, 0.45));
-          ctx.fillStyle = gn; ctx.fillRect(xa, y - h / 2 - 3, xb - xa, 5); ctx.fillRect(xa, y + h / 2 - 2, xb - xa, 5);
-          ctx.fillStyle = gl; ctx.fillRect(xa, y - h / 2, xb - xa, 2); ctx.fillRect(xa, y + h / 2 - 2, xb - xa, 2);
-        });
-      });
-      if (o.spb) {
-        var b = Math.ceil(o.time / o.spb);
-        for (; b * o.spb <= o.time + o.approach; b++) {
-          var dt = b * o.spb - o.time, bar = b % 4 === 0, a = (bar ? 0.45 : 0.18) * (1 - 0.6 * dt / o.approach);
-          ctx.fillStyle = hexA(C.cream, a);
-          [1, 2].forEach(function (ch) {
-            rows.forEach(function (row) { var x = noteX(L, ch, row, dt, o.approach); ctx.fillRect(x - (bar ? 1.5 : 1), L.rowY[row] - L.laneH / 2 + 3, bar ? 3 : 2, L.laneH - 6); });
-          });
-        }
-      }
-      var top = L.rowY[rows[0]] - L.laneH / 2;
-      ctx.font = '10px ' + FONT; ctx.textBaseline = 'middle';
-      rows.forEach(function (row) {
-        ctx.fillStyle = hexA(C.creamDim, 0.85);
-        ctx.textAlign = 'left'; ctx.fillText(row, 14, L.rowY[row] + 1);
-        ctx.textAlign = 'right'; ctx.fillText(row, W - 14, L.rowY[row] + 1);
-      });
-      ctx.font = '9px ' + FONT; ctx.fillStyle = C.cream;
-      ctx.textAlign = 'left'; ctx.fillText('CH1  LEFT HAND', 14, top - 16);
-      ctx.textAlign = 'right'; ctx.fillText('RIGHT HAND  CH2', W - 14, top - 16);
-      ctx.restore();
-    },
-    // dashed guide from marker to its knob while a note closes in. ready: map 'ch:ROW' -> 0..1
-    drawGuides: function (ctx, L, ready) {
-      ctx.save(); ctx.setLineDash([6, 8]); ctx.lineWidth = 2;
       L.rows.forEach(function (row) {
         [1, 2].forEach(function (ch) {
-          var r = ready[key(ch, row)] || 0; if (r <= 0) return;
-          var y = L.rowY[row], kp = L.knob[key(ch, row)], x0 = L.marker[ch][row] + (ch === 1 ? 28 : -28), x1 = kp.x + (ch === 1 ? -30 : 30) * kp.s;
-          ctx.strokeStyle = hexA(C.cream, 0.55 * r);
-          ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
+          var lane = L.lanes[ch][row], left = lane.x - width / 2;
+          var bottom = lane.hitY - L.markerR;
+          var band = ctx.createLinearGradient(0, 0, 0, bottom);
+          band.addColorStop(0, 'rgba(11,8,20,.58)'); band.addColorStop(1, 'rgba(11,8,20,.83)');
+          ctx.fillStyle = band; ctx.fillRect(left, 0, width, bottom);
+          var accent = ch === 1 ? C.magenta : C.cyan;
+          var rails = ctx.createLinearGradient(0, 0, 0, bottom);
+          rails.addColorStop(0, hexA(accent, 0.22)); rails.addColorStop(1, hexA(accent, 0.7));
+          ctx.fillStyle = rails;
+          ctx.fillRect(left, 0, 2, bottom); ctx.fillRect(left + width - 2, 0, 2, bottom);
+
+          if (!o.spb) return;
+          for (var beat = Math.ceil(o.time / o.spb); beat * o.spb <= o.time + o.approach; beat++) {
+            var y = noteY(L, lane, beat * o.spb - o.time, o.approach);
+            if (y < 0 || y > bottom) continue;
+            var downbeat = beat % 4 === 0;
+            ctx.fillStyle = hexA(C.cream, downbeat ? 0.42 : 0.18);
+            ctx.fillRect(left + 4, y, width - 8, downbeat ? 3 : 2);
+          }
+        });
+      });
+      ctx.restore();
+    },
+    drawGuides: function (ctx, L, upcoming, traces) {
+      ctx.save(); ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+      L.rows.forEach(function (row) {
+        [1, 2].forEach(function (ch) {
+          var id = key(ch, row), lane = L.lanes[ch][row], trace = traces && traces[id];
+          var color = ch === 1 ? C.magenta : C.cyan;
+          var segments = trace ? trace.length - 1 : 1;
+          ctx.beginPath(); ctx.moveTo(lane.x, lane.hitY);
+          for (var i = 1; i <= segments; i++) {
+            var f = i / segments;
+            ctx.lineTo(lane.x + traceOffset(trace, f, L.laneWidth), lerp(lane.hitY, L.spawnY, f));
+          }
+          var moving = upcoming[id] || trace;
+          ctx.strokeStyle = hexA(color, 0.24); ctx.lineWidth = moving ? 6 : 3; ctx.stroke();
+          ctx.strokeStyle = moving ? C.cream : hexA(color, 0.74);
+          ctx.lineWidth = moving ? 2.5 : 1.5; ctx.stroke();
         });
       });
       ctx.restore();
@@ -902,7 +916,8 @@
         var on = k < Math.round(e * segs), col = k > 12 ? C.magenta : k > 7 ? C.violet : C.cyan;
         ctx.fillStyle = on ? col : 'rgba(246,236,214,.12)'; ctx.fillRect(90 + k * 14.5, 209, 11, 11);
       }
-      // top-centre EQ strip reacting to the beat
+      // Stack the EQ below the score and combo so falling notes have a clear entrance.
+      ctx.translate(37 - (W / 2 - 150), 244 - 16);
       var bp = (s.beat || 0) - Math.floor(s.beat || 0);
       plate(ctx, W / 2 - 150, 16, 300, 90);
       for (k = 0; k < 18; k++) {
@@ -911,7 +926,7 @@
         for (var y = 0; y < hgt; y += 5) ctx.fillRect(W / 2 - 128 + k * 14.4, 60 - y, 10, 3);
       }
       ctx.font = '9px ' + FONT; ctx.textAlign = 'center'; ctx.fillStyle = s.mode === 'live' ? C.cyan : C.amber;
-      ctx.fillText(s.mode === 'live' ? 'LIVE CONTROLLER' : s.mode === 'keys' ? 'KEYBOARD PLAY' : 'SAMPLE DATA  AUTOPLAY', W / 2, 92);
+      ctx.fillText(s.mode === 'live' ? 'LIVE CONTROLLER' : s.mode === 'keys' ? 'KEYBOARD PLAY' : s.recordedMix ? 'MIX PREVIEW' : 'SAMPLE DATA  AUTOPLAY', W / 2, 92);
       ctx.restore();
     },
     // video: an HTMLVideoElement (or null for the empty slot). o: {mirror, t}
@@ -1252,12 +1267,11 @@
       return turn;
     }
     function showJudgment(ev) {
-      var y = L.rowY[ev.row], k = knobs[key(ev.channel, ev.row)];
-      if (y == null || !k) return;
-      var x = L.marker[ev.channel][ev.row];
+      var lane = L.lanes[ev.channel] && L.lanes[ev.channel][ev.row], k = knobs[key(ev.channel, ev.row)];
+      if (!lane || !k) return;
       k.flashT = clock; k.flashJ = ev.judgment;
       markers[key(ev.channel, ev.row)] = { flashT: clock, flashJ: ev.judgment };
-      fx.spawn(ev.judgment, x, y, ev.channel, ev.reason === 'wrong-way' ? 'WRONG WAY' : null);
+      fx.spawn(ev.judgment, lane.x, lane.hitY, ev.channel, ev.reason === 'wrong-way' ? 'WRONG WAY' : null);
     }
 
     function render(dt, tAbs) {
@@ -1279,10 +1293,12 @@
         k.angle = (k.pos - 0.5) * 2 * KNOB_SWEEP; k.ready = 0;
       });
       // readiness per lane from the nearest pending note
-      var ready = {}, due = {};
+      var ready = {}, due = {}, upcoming = {};
       (f.notes || []).forEach(function (n) {
         if (n.state !== 'pending' || L.rows.indexOf(n.row) < 0) return;
-        var d = n.time - f.time; if (d < -0.15 || d > 0.55) return;
+        var d = n.time - f.time;
+        if (d >= 0 && d <= approach) upcoming[key(n.channel, n.row)] = true;
+        if (d < -0.15 || d > 0.55) return;
         var r = d <= 0 ? 1 : 1 - d / 0.55, id = key(n.channel, n.row);
         if (!ready[id] || r > ready[id]) { ready[id] = r; due[id] = n; }
       });
@@ -1291,7 +1307,8 @@
         k.ready = ready[id] || 0;
         // cue = the turn this note asks for, measured from where the knob is when the note arrives
         if (!n) k.cue = null;
-        else if (!k.cue || k.cue.id !== n.id) k.cue = { id: n.id, dir: n.dir, deg: n.degrees || 30, from: k.angle };
+        else if (!k.cue || k.cue.id !== n.id) k.cue = { id: n.id, dir: n.dir, deg: n.degrees || 30,
+          from: typeof n.startPosition === 'number' ? (n.startPosition - 0.5) * 2 * KNOB_SWEEP : k.angle };
       });
 
       // retro layer
@@ -1308,11 +1325,12 @@
       // sharp layer
       var s = stage.sharp; s.setTransform(1, 0, 0, 1, 0, 0); s.clearRect(0, 0, W, H);
       NoteLanes.draw(s, L, { time: f.time, approach: approach, spb: spb });
-      NoteLanes.drawGuides(s, L, ready);
+      NoteLanes.drawGuides(s, L, upcoming, f.traces);
+      if (show.deck) Deck.drawOverlay(s, L, knobs, clock);
       L.rows.forEach(function (row) {
         [1, 2].forEach(function (ch) {
-          var m = markers[key(ch, row)] || {};
-          HitMarker.draw(s, L.marker[ch][row], L.rowY[row], { r: L.markerR, ready: ready[key(ch, row)] || 0, flashT: m.flashT, flashJ: m.flashJ, now: clock, side: ch });
+          var m = markers[key(ch, row)] || {}, lane = L.lanes[ch][row];
+          HitMarker.draw(s, lane.x, lane.hitY, { r: L.markerR, ready: ready[key(ch, row)] || 0, flashT: m.flashT, flashJ: m.flashJ, now: clock, side: ch });
         });
       });
       (f.notes || []).forEach(function (n) {
@@ -1320,11 +1338,19 @@
         var d = n.time - f.time; if (d > approach) return;
         var alpha = 1;
         if (n.state === 'miss') { alpha = 1 - (f.time - (n.judgedAt == null ? n.time : n.judgedAt)) / 0.35; if (alpha <= 0) return; }
-        Note.draw(s, noteX(L, n.channel, n.row, d, approach), L.rowY[n.row], n.dir, { r: L.noteR, side: n.channel, tail: n.state === 'pending', alpha: alpha });
+        var lane = L.lanes[n.channel][n.row];
+        var trace = f.traces && f.traces[key(n.channel, n.row)];
+        Note.draw(s, lane.x + traceOffset(trace, d / approach, L.laneWidth), noteY(L, lane, d, approach), n.dir, { r: L.noteR, tail: n.state === 'pending', alpha: alpha });
       });
-      if (show.deck) Deck.drawOverlay(s, L, knobs, clock);
+      if (f.entryCue) {
+        var jog = L.P(510 + L.flat.deckOffset[2], 612);
+        s.save(); s.textAlign = 'center'; s.textBaseline = 'middle';
+        s.font = (f.entryCue === 'SPIN RIGHT' ? '15px ' : '36px ') + FONT;
+        s.lineWidth = 6; s.strokeStyle = C.void; s.strokeText(f.entryCue, jog.x, jog.y);
+        s.fillStyle = C.cream; s.fillText(f.entryCue, jog.x, jog.y); s.restore();
+      }
       fx.draw(s);
-      if (show.hud) HUD.draw(s, { score: f.score, combo: f.combo, multiplier: f.multiplier, energy: energy, mode: f.mode, beat: beat });
+      if (show.hud) HUD.draw(s, { score: f.score, combo: f.combo, multiplier: f.multiplier, energy: energy, mode: f.mode, beat: beat, recordedMix: f.recordedMix });
       if (show.hud && show.webcam !== false) HUD.drawWebcam(s, webcam, { mirror: webcamMirror, t: tAbs });
     }
     stage.run(render);

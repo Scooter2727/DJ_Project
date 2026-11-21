@@ -2,12 +2,16 @@ import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { decodeMidi } from "./midi.js";
 import { MixAudioEngine } from "./audio.js";
+import { buildMixChart, ROW_BY_CONTROL } from "./mixChart.js";
+import { createMixSession } from "./mixSession.js";
 import "./mainstage.css";
 
-const TRACK_A = "/mixes/mix1/deck-a.mp3";
-const TRACK_B = "/mixes/mix1/deck-b.mp3";
-const ROWS = ["TRIM", "HI", "MID", "LOW", "CFX"];
-const ROW_BY_CONTROL = { trim: "TRIM", high: "HI", mid: "MID", low: "LOW", cfx: "CFX" };
+const ROWS = Object.values(ROW_BY_CONTROL);
+async function loadJson(url, signal) {
+  const response = await fetch(url, { signal });
+  if (!response.ok) throw new Error("Could not load " + url);
+  return response.json();
+}
 const TRACKS = [
   { id: "mix1", name: "HEROES / LEVELS", color: "#34e0ff", icon: "bolt", bpm: 126 },
   { id: "heroes", name: "HEROES", color: "#ffb330", icon: "mic", bpm: 126 },
@@ -18,8 +22,7 @@ function MainstageApp() {
   const mountRef = useRef(null);
   const pageRef = useRef(null);
   const screenRef = useRef(null);
-  const sourceRef = useRef(null);
-  const accessRef = useRef(null);
+  const sessionRef = useRef(null);
   const audioRef = useRef(null);
   const valuesRef = useRef({});
   const modeRef = useRef("title");
@@ -31,6 +34,26 @@ function MainstageApp() {
   const [message, setMessage] = useState("");
   const [selectedTrack, setSelectedTrack] = useState(TRACKS[0]);
   const [cameraOn, setCameraOn] = useState(false);
+  const [mix, setMix] = useState(null);
+  const [transport, setTransport] = useState("ready");
+
+  useEffect(() => {
+    const controller = new AbortController();
+    async function load() {
+      const manifest = await loadJson("/mixes/mix1/tracks.json", controller.signal);
+      const recording = await loadJson(manifest.recording, controller.signal);
+      setMix({ manifest, recording });
+    }
+    load().catch(error => { if (!controller.signal.aborted) setMessage(error.message); });
+    return () => controller.abort();
+  }, []);
+
+  function getAudio() {
+    if (!audioRef.current) {
+      audioRef.current = new MixAudioEngine({ deckA: mix.manifest.deckA.file, deckB: mix.manifest.deckB.file });
+    }
+    return audioRef.current;
+  }
 
   const F = () => window.FLXHero;
 
@@ -41,10 +64,8 @@ function MainstageApp() {
   useEffect(() => {
     const api = F();
     if (!api || !mountRef.current) return undefined;
-    if (pageRef.current?.destroy) pageRef.current.destroy();
     pageRef.current = null;
     screenRef.current = null;
-    sourceRef.current = null;
     mountRef.current.innerHTML = "";
 
     if (mode === "title") {
@@ -100,25 +121,27 @@ function MainstageApp() {
       return () => pageRef.current?.destroy();
     }
 
-    const source = api.createSampleSource({ autoplay: false, keyboard: false });
+    if (!mix) return;
+    const chart = buildMixChart(mix.recording, mix.manifest, selectedTrack.id);
+    const session = createMixSession(chart, selectedTrack.id, selectedTrack.bpm, {
+      getAudio, liveValues: () => valuesRef.current, onState: setTransport, onError: setMessage,
+    });
     const screen = api.createScreen(mountRef.current, {
       rows: ROWS,
-      source,
+      source: session.source,
       knobSmoothing: 0.035,
       show: { venue: true, crowd: true, deck: true, hud: true, webcam: true },
     });
     screenRef.current = screen;
-    sourceRef.current = source;
+    session.attach(screen);
+    sessionRef.current = session;
     pageRef.current = screen;
     return () => {
-      source.destroy?.();
+      sessionRef.current = null;
+      session.destroy();
       screen.destroy();
     };
-  }, [mode]);
-
-  useEffect(() => {
-    accessRef.current = access;
-  }, [access]);
+  }, [mode, mode === "game" ? mix : null, selectedTrack]);
 
   useEffect(() => {
     if (!access) return undefined;
@@ -158,11 +181,14 @@ function MainstageApp() {
 
       if (modeRef.current === "title") {
         const changedKnob = Object.keys(changes).some(key => ROW_BY_CONTROL[key.split(".")[1]]);
-        if (changedKnob || leftJogTrigger || rightJogTrigger) setMode("select");
+        if (changedKnob || leftJogDelta || rightJogDelta) setMode("select");
+        return;
       } else if (modeRef.current === "select") {
-        if (leftJogTrigger) pageRef.current?.jog({ side: "left", delta: leftDelta });
-        if (rightJogTrigger) pageRef.current?.jog({ side: "right", delta: rightDelta });
+        if (leftDelta) pageRef.current?.jog({ side: "left", delta: leftDelta });
+        if (rightDelta) pageRef.current?.jog({ side: "right", delta: rightDelta });
+        return;
       } else {
+        if (!sessionRef.current || sessionRef.current.demo) return;
         const screen = screenRef.current;
         for (const [key, value] of Object.entries(changes)) {
           const [deck, control] = key.split(".");
@@ -172,15 +198,12 @@ function MainstageApp() {
         }
       }
 
-      if (Object.prototype.hasOwnProperty.call(changes, "a.play")) {
-        audioRef.current?.setPlaying("a", Boolean(next["a.play"])).catch(() => {});
+      for (const [deck, jog] of [["a", leftJogTrigger], ["b", rightJogTrigger]]) {
+        const key = deck + ".play";
+        if (jog) next[key] = true;
+        if (jog || key in changes) sessionRef.current.input(deck, next[key]);
       }
-      if (Object.prototype.hasOwnProperty.call(changes, "b.play")) {
-        audioRef.current?.setPlaying("b", Boolean(next["b.play"])).catch(() => {});
-      }
-      if (leftJogTrigger) audioRef.current?.setPlaying("a", true).catch(() => {});
-      if (rightJogTrigger) audioRef.current?.setPlaying("b", true).catch(() => {});
-      audioRef.current?.update(next);
+      sessionRef.current.update(next);
     };
 
     port.addEventListener("midimessage", receive);
@@ -197,9 +220,7 @@ function MainstageApp() {
   async function connect() {
     try {
       if (!navigator.requestMIDIAccess) throw new Error("Use desktop Chrome or Edge on localhost for Web MIDI.");
-      audioRef.current = new MixAudioEngine({ deckA: TRACK_A, deckB: TRACK_B });
-      await audioRef.current.resume();
-      audioRef.current.update(valuesRef.current);
+      await getAudio().resume();
       const nextAccess = await navigator.requestMIDIAccess();
       setAccess(nextAccess);
       setMessage("");
@@ -209,8 +230,8 @@ function MainstageApp() {
   }
 
   function disconnect() {
+    sessionRef.current?.stop();
     audioRef.current?.stop();
-    audioRef.current = null;
     setAccess(null);
     setPorts([]);
     setSelectedPort("");
@@ -240,12 +261,17 @@ function MainstageApp() {
         {mode === "title" ? "Start" : "Main menu"}
       </button>
       {mode === "game" && <button className="mainstage-button" onClick={() => setMode("select")}>Tracks</button>}
-      <button className="mainstage-button" onClick={access ? disconnect : connect}>{access ? "Disconnect DDJ" : "Connect DDJ-FLX4"}</button>
+      {mode === "game" && <button className="mainstage-button" disabled={!mix} onClick={() => sessionRef.current?.preview()}>
+        {transport === "demo" || transport === "live" ? "Stop mix" : "Preview mix"}
+      </button>}
+      <button className="mainstage-button" disabled={!mix} onClick={access ? disconnect : connect}>{access ? "Disconnect DDJ" : "Connect DDJ-FLX4"}</button>
       {mode === "game" && <button className="mainstage-button" onClick={toggleCamera}>{cameraOn ? "Hide camera" : "Use camera"}</button>}
       {ports.length > 1 && <select className="mainstage-select" value={selectedPort} onChange={event => setSelectedPort(event.target.value)} aria-label="MIDI input">
         {ports.map(input => <option key={input.id} value={input.id}>{input.name || "MIDI input"}</option>)}
       </select>}
-      <span className={connected ? "mainstage-status online" : "mainstage-status"}>{message || (connected ? "DDJ connected" : mode === "game" ? "Keyboard preview" : selectedTrack.name)}</span>
+      <span className={connected ? "mainstage-status online" : "mainstage-status"}>{message || (mode === "game" && transport === "finished" ? "Mix complete" :
+        mode === "game" && transport === "ready" && connected ? (selectedTrack.id === "levels" ? "Spin right clockwise to start Levels" : "Spin left counterclockwise to start Heroes") :
+        connected ? "DDJ connected" : selectedTrack.name)}</span>
     </div>
   </main>;
 }

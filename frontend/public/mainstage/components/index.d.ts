@@ -4,9 +4,9 @@ export type Channel = 1 | 2;
 export type Dir = 'cw' | 'ccw';
 export type Judgment = 'perfect' | 'good' | 'miss';
 
-export interface LiveNote { id: string | number; channel: Channel; row: Row; dir: Dir; time: number; state: 'pending' | 'hit' | 'miss'; judgedAt?: number; degrees?: number /* turn size for the cue, default 30 */; }
+export interface LiveNote { id: string | number; channel: Channel; row: Row; dir: Dir; time: number; state: 'pending' | 'hit' | 'miss'; judgedAt?: number; degrees?: number; startPosition?: number; }
 export interface AudioFrame { kick: number; bass: number; hats: number; energy: number; bands?: number[]; level?: [number, number]; }
-export interface GameFrame { time: number; bpm: number; approach?: number; notes: LiveNote[]; score: number; combo: number; multiplier?: number; energy?: number; mode?: 'live' | 'keys' | 'demo'; audio?: AudioFrame; }
+export interface GameFrame { time: number; bpm: number; approach?: number; notes: LiveNote[]; score: number; combo: number; multiplier?: number; energy?: number; mode?: 'live' | 'keys' | 'demo'; audio?: AudioFrame; traces?: Record<string, number[]>; recordedMix?: boolean; entryCue?: string | null; }
 export interface GameSource { frame(dt: number): GameFrame; attach?(screen: Screen): void; setRows?(rows: Row[]): void; }
 
 export interface KnobEvent { channel: Channel; row: Row; position?: number; delta?: number; }

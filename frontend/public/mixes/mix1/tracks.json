@@ -1,6 +1,8 @@
 {
   "name": "mix1",
-  "audioEngine": "rekordbox",
+  "recording": "/recordings/mix1.json",
+  "cueOffsetMs": -4000,
+  "deckBEntryMs": 22933,
   "deckA": {
     "title": "Heroes (we could be)",
     "artist": "Alesso",
