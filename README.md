@@ -16,4 +16,10 @@ Open the localhost URL printed by Vite in desktop Chrome or Edge. Plug the FLX4 
 
 If the controller does not appear, check that the cable supports data. If the MIDI input will not open, close other DJ software and reconnect.
 
-The display follows MIDI messages as controls move. A dash means the app has yet to receive a value for that control. The Play indicator toggles with Play presses. The console displays controller input and does not play or mix audio.
+## In-app audio challenge mode
+
+Deck Relay loads the two bundled `mix1` tracks into its own Web Audio mixer. Rekordbox is not required. Connect the FLX4, load `mix1`, and click **Start challenge**. The app starts both tracks, applies the FLX4's channel volume, EQ, CFX, and crossfader controls to the audio, and scores the live performance against the reference timeline.
+
+The bundled `mix1` sources are `frontend/public/mixes/mix1/deck-a.mp3` (Alesso — *Heroes (we could be)*) and `frontend/public/mixes/mix1/deck-b.mp3` (Avicii — *Levels (Radio Edit)*). Load those same files into Rekordbox for the challenge.
+
+The display follows MIDI messages as controls move. A dash means the app has yet to receive a value for that control. The Play indicator toggles with Play presses. Jog wheels remain available for the game layer and can be mapped to scratching or seeking later.

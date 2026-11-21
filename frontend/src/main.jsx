@@ -2,11 +2,16 @@ import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { decodeMidi } from "./midi.js";
 import { scoreRecording, upcomingContinuousControls } from "./scoring.js";
+import { MixAudioEngine } from "./audio.js";
 import "./style.css";
 
 const percent = value => value === undefined ? "—" : Math.round(value / 16383 * 100) + "%";
 const pairs = [["trim", "Trim"], ["high", "High EQ"], ["mid", "Mid EQ"], ["low", "Low EQ"], ["cfx", "CFX"]];
 const RECORDINGS_KEY = "deck-relay-recordings";
+const DEFAULT_RECORDING_PATH = "/recordings/mix1.json";
+const MIX_MANIFEST_PATH = "/mixes/mix1/tracks.json";
+const MIX_TRACK_A = "/mixes/mix1/deck-a.mp3";
+const MIX_TRACK_B = "/mixes/mix1/deck-b.mp3";
 
 function savedRecordings() {
   try {
@@ -87,6 +92,7 @@ function App() {
   const [recordings, setRecordings] = useState(savedRecordings);
   const [selectedRecordingId, setSelectedRecordingId] = useState("");
   const [loadedRecording, setLoadedRecording] = useState(null);
+  const [mixManifest, setMixManifest] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [targetValues, setTargetValues] = useState({});
@@ -98,6 +104,46 @@ function App() {
   const playbackRef = useRef(null);
   const challengeRef = useRef(null);
   const targetPlaybackRef = useRef(null);
+  const audioEngineRef = useRef(null);
+
+  useEffect(() => {
+    let active = true;
+    fetch(DEFAULT_RECORDING_PATH)
+      .then(response => {
+        if (!response.ok) throw new Error("Default recording unavailable");
+        return response.json();
+      })
+      .then(defaultRecording => {
+        if (!active || !Array.isArray(defaultRecording.events) || !defaultRecording.events.length) return;
+        const mix1 = {
+          ...defaultRecording,
+          id: defaultRecording.id || "mix1-default",
+          name: "mix1",
+        };
+        setRecordings(current => {
+          const next = current.some(item => item.id === mix1.id)
+            ? current.map(item => item.id === mix1.id ? mix1 : item)
+            : [mix1, ...current];
+          localStorage.setItem(RECORDINGS_KEY, JSON.stringify(next));
+          return next;
+        });
+        setSelectedRecordingId(mix1.id);
+        setLoadedRecording(mix1);
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetch(MIX_MANIFEST_PATH)
+      .then(response => response.ok ? response.json() : null)
+      .then(manifest => {
+        if (active && manifest) setMixManifest(manifest);
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     if (!access) return;
@@ -126,10 +172,18 @@ function App() {
       if (playbackRef.current) return;
       const bytes = Array.from(event.data);
       const { values } = live.current;
-      const nextValues = { ...values, ...decodeMidi(bytes, values) };
+      const changes = decodeMidi(bytes, values);
+      const nextValues = { ...values, ...changes };
       live.current = {
         values: nextValues,
       };
+      audioEngineRef.current?.update(nextValues);
+      for (const deck of ["a", "b"]) {
+        const playKey = deck + ".play";
+        if (Object.prototype.hasOwnProperty.call(changes, playKey)) {
+          audioEngineRef.current?.setPlaying(deck, Boolean(nextValues[playKey])).catch(() => {});
+        }
+      }
       if (recordingRef.current) {
         recordingRef.current.events.push({
           t: performance.now() - recordingRef.current.startedAt,
@@ -213,6 +267,18 @@ function App() {
     setCueControls(new Set());
   }
 
+  function saveRecordingToComputer() {
+    const recording = recordings.find(item => item.id === selectedRecordingId) || loadedRecording;
+    if (!recording) return;
+    const file = new Blob([JSON.stringify(recording, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(file);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = recording.name.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase() + ".json";
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
   function playRecording() {
     if (!loadedRecording || !loadedRecording.events.length || isRecording) return;
     stopPlayback();
@@ -256,6 +322,7 @@ function App() {
     challengeRef.current = null;
     if (targetPlaybackRef.current?.raf) cancelAnimationFrame(targetPlaybackRef.current.raf);
     targetPlaybackRef.current = null;
+    audioEngineRef.current?.stop();
     setTargetValues({});
     setCueControls(new Set());
     setIsChallenging(false);
@@ -268,6 +335,7 @@ function App() {
   function startChallenge() {
     if (!loadedRecording || !loadedRecording.events.length || !port || !connected || isRecording || isPlaying) return;
     stopPlayback();
+    audioEngineRef.current?.startBoth().catch(error => setMessage("Audio could not start: " + error.message));
     setScoreResult(null);
     setIsChallenging(true);
     setCueControls(new Set());
@@ -308,6 +376,8 @@ function App() {
     setMessage("");
     try {
       if (!navigator.requestMIDIAccess) throw new Error("Open the app on localhost in desktop Chrome or Edge.");
+      audioEngineRef.current = new MixAudioEngine({ deckA: MIX_TRACK_A, deckB: MIX_TRACK_B });
+      await audioEngineRef.current.resume();
       setAccess(await navigator.requestMIDIAccess());
     } catch (error) {
       setMessage(error.message || "Allow MIDI access in your browser and try again.");
@@ -317,12 +387,17 @@ function App() {
   }
 
   function disconnect() {
+    audioEngineRef.current?.stop();
+    audioEngineRef.current = null;
     setAccess(null);
     setPorts([]);
     setSelected("");
   }
 
   const { values } = frame;
+  const challengeStatus = isChallenging
+    ? "Challenge live - Deck Relay is mixing the songs."
+    : "App audio ready - Rekordbox is not required.";
   const status = message || (connected ? "Listening to " + (port?.name || "MIDI input")
     : port ? "Opening MIDI input…" : access ? "No MIDI input found. Check the USB data cable." : "Plug in your FLX4 to get started.");
 
@@ -343,6 +418,7 @@ function App() {
           {recordings.map(recording => <option key={recording.id} value={recording.id}>{recording.name}</option>)}
         </select>
         <button className="secondary-button" onClick={loadRecording} disabled={!selectedRecordingId || isRecording || isChallenging}>Load</button>
+        <button className="secondary-button" onClick={saveRecordingToComputer} disabled={(!loadedRecording && !selectedRecordingId) || isRecording || isChallenging}>Save file</button>
         <button className="secondary-button" onClick={isPlaying ? stopPlayback : playRecording} disabled={!loadedRecording || isRecording || isChallenging}>
           {isPlaying ? "Stop" : "Play"}
         </button>
@@ -352,6 +428,11 @@ function App() {
         {loadedRecording && <span className="loaded-recording">{loadedRecording.name}</span>}
       </div>
     </div>
+    <div className="status"><span className={connected ? "online" : ""} /><span>{status}</span><strong className="challenge-status">{challengeStatus}</strong></div>
+    {mixManifest && <div className="track-strip" aria-label="Mix tracks">
+      <span><b>A</b>{mixManifest.deckA.artist} — {mixManifest.deckA.title}</span>
+      <span><b>B</b>{mixManifest.deckB.artist} — {mixManifest.deckB.title}</span>
+    </div>}
     <div className="surface">
       <Deck side="a" values={values} targetValues={targetValues} cueControls={cueControls} />
       <section className="mixer" aria-label="Mixer">
