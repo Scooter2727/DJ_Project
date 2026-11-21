@@ -91,7 +91,7 @@ test("signals drop on ten persistent guides that end at their projected knobs", 
   }
 });
 
-function setup(selection = "mix1") {
+function setup(selection = "mix1", options = {}, customRecording) {
   const player = () => ({ currentTime: 0, paused: true, ended: false, readyState: 4, pause() { this.paused = true; } });
   const players = { a: player(), b: player() }, starts = [], mixes = [], judgments = [], states = [];
   const engine = { players, audioFrame: () => ({}), update: values => mixes.push(values),
@@ -100,14 +100,55 @@ function setup(selection = "mix1") {
     stop() { for (const p of Object.values(players)) { p.pause(); p.currentTime = 0; } } };
   let turn;
   const view = { knob() {}, onTurn(fn) { turn = fn; return () => {}; }, showJudgment(j) { judgments.push(j); } };
-  const data = buildMixChart(recording, manifest, selection);
+  const data = buildMixChart(customRecording ?? recording,
+    customRecording ? { ...manifest, cueOffsetMs: 0 } : manifest, selection);
   const session = createMixSession(data, selection, 126, {
-    getAudio: () => engine, liveValues: () => ({}), onState: state => states.push(state), onError: assert.fail
+    getAudio: () => engine, liveValues: () => ({}), onState: state => states.push(state), onError: assert.fail,
+    ...options,
   });
   session.source.attach(view);
   session.attach(view);
   return { session, players, starts, states, mixes, judgments, frame: () => session.source.frame(50), turn, data };
 }
+
+test("a captured mix replays the recorded crossfader and manual Levels entry", () => {
+  let captured;
+  const live = setup("mix1", { onRecording: value => { captured = value; } });
+  assert.equal(live.session.startRecording(), true);
+  assert.deepEqual(live.starts, ["a"]);
+  live.players.a.currentTime = 5;
+  live.session.input("b", true, "midi");
+  live.players.a.currentTime = 10;
+  live.session.update({ "mixer.crossfade": 12000 });
+  live.players.a.currentTime = 30;
+  live.session.input("b", true);
+  live.frame();
+  const levelsPosition = live.players.b.currentTime;
+  live.players.a.currentTime = 34;
+  live.session.input("b", false, "midi");
+  live.frame();
+  live.players.a.currentTime = 38;
+  live.session.stop();
+
+  const saved = JSON.parse(JSON.stringify(captured));
+  assert.deepEqual(saved.playButtonEvents, [
+    { t: 5000, deck: "b", source: "midi", requestedPlaying: true },
+    { t: 34000, deck: "b", source: "midi", requestedPlaying: false },
+  ]);
+  const replay = setup("mix1", { recordedLevels: saved.levelsEvents }, saved);
+  replay.session.preview();
+  replay.players.a.currentTime = 29;
+  replay.frame();
+  assert.deepEqual(replay.starts, ["a"]);
+  assert.equal(replay.mixes.at(-1)["mixer.crossfade"], 12000);
+  replay.players.a.currentTime = 30;
+  replay.frame();
+  assert.deepEqual(replay.starts, ["a", "b"]);
+  assert.equal(replay.players.b.currentTime, levelsPosition);
+  replay.players.a.currentTime = 34;
+  replay.frame();
+  assert.equal(replay.players.b.paused, true);
+});
 
 test("live cues follow the first deck media position through pauses and manual Deck B entry", async () => {
   const { players, session, starts, frame, turn, judgments } = setup();

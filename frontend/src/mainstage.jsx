@@ -10,6 +10,16 @@ import { usePoseTracker } from "./crowd/usePoseTracker.js";
 import "./mainstage.css";
 
 const ROWS = Object.values(ROW_BY_CONTROL);
+const SAVED_MIXES_KEY = "mainstage-saved-mixes";
+
+function readSavedMixes() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SAVED_MIXES_KEY) || "[]");
+    return Array.isArray(saved) ? saved : [];
+  } catch {
+    return [];
+  }
+}
 async function loadJson(url, signal) {
   const response = await fetch(url, { signal });
   if (!response.ok) throw new Error("Could not load " + url);
@@ -38,12 +48,27 @@ function MainstageApp() {
   const [ports, setPorts] = useState([]);
   const [selectedPort, setSelectedPort] = useState("");
   const [connected, setConnected] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [receivingMidi, setReceivingMidi] = useState(false);
   const [message, setMessage] = useState("");
   const [selectedTrack, setSelectedTrack] = useState(TRACKS[0]);
   const [cameraOn, setCameraOn] = useState(false);
   const [mix, setMix] = useState(null);
   const [transport, setTransport] = useState("ready");
+  const [levelsDelayMs, setLevelsDelayMs] = useState(-150);
+  const levelsDelayRef = useRef(levelsDelayMs);
+  const [savedMixes, setSavedMixes] = useState(readSavedMixes);
+  const [chosenMix, setChosenMix] = useState("");
+  const [loadedMix, setLoadedMix] = useState(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [draftMix, setDraftMix] = useState(null);
+  const [mixName, setMixName] = useState("");
+  const saveDialogRef = useRef(null);
   const gameMix = mode === "game" ? mix : null;
+
+  useEffect(() => {
+    if (draftMix) saveDialogRef.current?.showModal();
+  }, [draftMix]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -158,9 +183,23 @@ function MainstageApp() {
     }
 
     if (!mix) return;
-    const chart = buildMixChart(mix.recording, mix.manifest, selectedTrack.id);
+    const customMix = selectedTrack.id === "mix1" ? loadedMix : null;
+    const chart = buildMixChart(customMix ?? mix.recording,
+      customMix ? { ...mix.manifest, cueOffsetMs: 0 } : mix.manifest, selectedTrack.id);
     const session = createMixSession(chart, selectedTrack.id, selectedTrack.bpm, {
-      getAudio, liveValues: () => valuesRef.current, onState: setTransport, onError: setMessage,
+      getAudio, liveValues: () => valuesRef.current,
+      onState: next => {
+        setTransport(next);
+        if (next === "ready" || next === "finished") setIsRecording(false);
+      },
+      onError: setMessage,
+      getLevelsDelayMs: () => levelsDelayRef.current,
+      recordedLevels: customMix?.levelsEvents,
+      onRecording: recording => {
+        if (!recording) return;
+        setDraftMix(recording);
+        setMixName("Untitled mix");
+      },
     });
     const screen = api.createScreen(mountRef.current, {
       rows: ROWS,
@@ -189,7 +228,7 @@ function MainstageApp() {
       session.destroy();
       screen.destroy();
     };
-  }, [mode, selectedTrack, gameMix, previewDeck, readPlayback]);
+  }, [mode, selectedTrack, gameMix, previewDeck, readPlayback, loadedMix]);
 
   useEffect(() => {
     screenRef.current?.setWebcam(cameraOn ? cameraVideoRef.current : null);
@@ -214,10 +253,16 @@ function MainstageApp() {
   useEffect(() => {
     valuesRef.current = {};
     setConnected(false);
+    setReceivingMidi(false);
     if (!port) return undefined;
     let active = true;
+    let received = false;
 
     const receive = event => {
+      if (!received) {
+        received = true;
+        setReceivingMidi(true);
+      }
       const bytes = Array.from(event.data);
       const previous = valuesRef.current;
       const changes = decodeMidi(bytes, previous);
@@ -238,6 +283,11 @@ function MainstageApp() {
       } else if (modeRef.current === "select") {
         if (leftDelta) pageRef.current?.jog({ side: "left", delta: leftDelta });
         if (rightDelta) pageRef.current?.jog({ side: "right", delta: rightDelta });
+        if ("a.play" in changes || "b.play" in changes) {
+          delete next["a.play"];
+          delete next["b.play"];
+          pageRef.current?.confirm();
+        }
         return;
       } else {
         if (!sessionRef.current || sessionRef.current.demo) return;
@@ -253,7 +303,9 @@ function MainstageApp() {
       for (const [deck, jog] of [["a", leftJogTrigger], ["b", rightJogTrigger]]) {
         const key = deck + ".play";
         if (jog) next[key] = true;
-        if (jog || key in changes) sessionRef.current.input(deck, next[key]);
+        if (jog || key in changes) {
+          sessionRef.current.input(deck, next[key], key in changes ? "midi" : undefined);
+        }
       }
       sessionRef.current.update(next);
     };
@@ -270,14 +322,18 @@ function MainstageApp() {
   }, [port]);
 
   async function connect() {
+    setConnecting(true);
+    setMessage("");
     try {
       if (!navigator.requestMIDIAccess) throw new Error("Use desktop Chrome or Edge on localhost for Web MIDI.");
-      await getAudio().resume();
+      // Start audio unlock from the click, but let MIDI connect independently.
+      void Promise.resolve().then(() => getAudio().resume()).catch(() => {});
       const nextAccess = await navigator.requestMIDIAccess();
       setAccess(nextAccess);
-      setMessage("");
     } catch (error) {
       setMessage(error.message || "MIDI access was not granted.");
+    } finally {
+      setConnecting(false);
     }
   }
 
@@ -302,30 +358,92 @@ function MainstageApp() {
     setMode("title");
   }
 
+  function saveMix(event) {
+    event.preventDefault();
+    if (!draftMix || !mixName.trim()) return;
+    const recording = { ...draftMix, name: mixName.trim(), id: crypto.randomUUID() };
+    const next = [recording, ...savedMixes];
+    try {
+      localStorage.setItem(SAVED_MIXES_KEY, JSON.stringify(next));
+    } catch {
+      setMessage("Could not save the mix in this browser.");
+      return;
+    }
+    setMessage("");
+    setSavedMixes(next);
+    setChosenMix(recording.id);
+    setLoadedMix(recording);
+    setDraftMix(null);
+  }
+
+  const mixActive = transport === "live" || transport === "demo";
+  const canRecord = mode === "game" && selectedTrack.id === "mix1" && !!mix;
+
   return <main className="mainstage-shell">
     <video className="mainstage-camera-source" ref={cameraVideoRef} muted playsInline aria-hidden="true" />
     {mode === "game" && <div className="mainstage-hype-accessible" ref={hypeMeterRef} role="meter" aria-label="Crowd hype" aria-valuemin={0} aria-valuemax={100} aria-valuenow={STARTING_HYPE} />}
     <div className="mainstage-stage" ref={mountRef} />
     <div className="mainstage-controls" aria-label="MAINSTAGE controls">
-      <button className="mainstage-button" onClick={mode === "title" ? () => setMode("select") : openMainMenu}>
+      <button className="mainstage-button" disabled={isRecording} onClick={mode === "title" ? () => setMode("select") : openMainMenu}>
         {mode === "title" ? "Start" : "Main menu"}
       </button>
-      {mode === "game" && <button className="mainstage-button" onClick={() => setMode("select")}>Tracks</button>}
-      {mode === "game" && <button className="mainstage-button" disabled={!mix} onClick={() => sessionRef.current?.preview()}>
-        {transport === "demo" || transport === "live" ? "Stop mix" : "Preview mix"}
+      {mode === "game" && <button className="mainstage-button" disabled={isRecording} onClick={() => setMode("select")}>Tracks</button>}
+      {mode === "game" && <button className="mainstage-button" disabled={!mix || isRecording || !!draftMix} onClick={() => sessionRef.current?.preview()}>
+        {mixActive ? "Stop mix" : canRecord && loadedMix ? "Play saved mix" : "Preview mix"}
       </button>}
       {mode === "game" && <button className="mainstage-button" disabled={!mix} onClick={() => sessionRef.current?.togglePlayback()}>
         {previewPlaying ? "Pause track" : "Play track"}
       </button>}
-      <button className="mainstage-button" disabled={!mix} onClick={access ? disconnect : connect}>{access ? "Disconnect DDJ" : "Connect DDJ-FLX4"}</button>
+      {mode === "game" && selectedTrack.id === "mix1" && <label className="mainstage-levels-delay">
+        Levels intro offset
+        <input type="range" min={-2000} max={2000} step={25} value={levelsDelayMs}
+          disabled={transport === "live" || transport === "demo"}
+          aria-valuetext={levelsDelayMs === 0 ? "Default timing" : `${Math.abs(levelsDelayMs)} milliseconds ${levelsDelayMs < 0 ? "earlier" : "later"}`}
+          onChange={event => {
+            const delay = event.currentTarget.valueAsNumber;
+            levelsDelayRef.current = delay;
+            setLevelsDelayMs(delay);
+          }} />
+        <span>{levelsDelayMs > 0 ? "+" : ""}{levelsDelayMs} ms</span>
+      </label>}
+      <button className="mainstage-button" disabled={!mix || connecting} onClick={access ? disconnect : connect}>{connecting ? "Requesting MIDI…" : access ? "Disconnect DDJ" : "Connect DDJ-FLX4"}</button>
       {mode === "game" && <button className="mainstage-button" onClick={toggleCamera}>{cameraFailed ? "Retry camera" : cameraOn ? "Hide camera" : "Use camera"}</button>}
       {ports.length > 1 && <select className="mainstage-select" value={selectedPort} onChange={event => setSelectedPort(event.target.value)} aria-label="MIDI input">
         {ports.map(input => <option key={input.id} value={input.id}>{input.name || "MIDI input"}</option>)}
       </select>}
-      <span className={connected ? "mainstage-status online" : "mainstage-status"}>{(cameraOn && camera.status === "error" && camera.message) || message || (mode === "game" && transport === "finished" ? "Mix complete" :
+      <span className={connected ? "mainstage-status online" : "mainstage-status"}>{message || (access && !port ? "No MIDI input found. Check the USB data cable." : access && !connected ? "Opening MIDI input…" : connected && !receivingMidi ? "MIDI input open. Move a knob to test." : null) || (cameraOn && camera.status === "error" && camera.message) || (mode === "game" && transport === "finished" ? "Mix complete" :
         mode === "game" && transport === "ready" && connected ? (selectedTrack.id === "levels" ? "Spin right clockwise to start Levels" : "Spin left counterclockwise to start Heroes") :
         connected ? "DDJ connected" : selectedTrack.name)}</span>
     </div>
+    {canRecord && <div className="mainstage-controls mainstage-mix-controls" aria-label="Mix recordings">
+      <button className="mainstage-button" disabled={(!isRecording && mixActive) || !!draftMix} onClick={() => {
+        if (isRecording) sessionRef.current?.stop();
+        else if (sessionRef.current?.startRecording()) {
+          setMessage("");
+          setIsRecording(true);
+        }
+      }}>{isRecording ? "Stop recording" : "Record mix"}</button>
+      {isRecording && <span role="status">Recording mix</span>}
+      {draftMix && <dialog ref={saveDialogRef} className="mainstage-save-dialog" aria-labelledby="save-mix-title"
+        onCancel={event => event.preventDefault()}>
+        <h2 id="save-mix-title">Name and save your mix</h2>
+        <form className="mainstage-mix-controls" onSubmit={saveMix}>
+          <input className="mainstage-select" aria-label="Mix name" maxLength={80} autoFocus
+            value={mixName} onFocus={event => event.currentTarget.select()} onChange={event => setMixName(event.target.value)} />
+          <button className="mainstage-button" disabled={!mixName.trim()}>Save mix</button>
+          <button type="button" className="mainstage-button" onClick={() => setDraftMix(null)}>Discard</button>
+        </form>
+        {message && <p role="alert">{message}</p>}
+      </dialog>}
+      <select className="mainstage-select" aria-label="Saved mix" value={chosenMix}
+        disabled={mixActive || isRecording || !!draftMix} onChange={event => setChosenMix(event.target.value)}>
+        <option value="">Original mix</option>
+        {savedMixes.map(recording => <option key={recording.id} value={recording.id}>{recording.name}</option>)}
+      </select>
+      <button className="mainstage-button" disabled={mixActive || isRecording || !!draftMix}
+        onClick={() => setLoadedMix(savedMixes.find(recording => recording.id === chosenMix) ?? null)}>Load mix</button>
+      <span role="status">Loaded: {loadedMix?.name ?? "Original mix"}</span>
+    </div>}
   </main>;
 }
 

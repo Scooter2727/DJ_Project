@@ -83,6 +83,45 @@ body {
   white-space: nowrap;
 }
 
+.mainstage-levels-delay {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  font: 12px/18px "Space Grotesk", system-ui, sans-serif;
+}
+
+.mainstage-levels-delay input {
+  width: 105px;
+  accent-color: #a983ff;
+}
+
+.mainstage-mix-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font: 12px/18px "Space Grotesk", system-ui, sans-serif;
+}
+
+.mainstage-save-dialog {
+  max-width: calc(100vw - 48px);
+  padding: 18px;
+  border: 1px solid #a983ff;
+  border-radius: 6px;
+  background: #1a1028;
+  color: #f6ecd6;
+}
+
+.mainstage-save-dialog::backdrop {
+  background: #0b0814bb;
+}
+
+.mainstage-save-dialog h2 {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+
 .mainstage-status.online {
   color: #6bff9e;
 }
