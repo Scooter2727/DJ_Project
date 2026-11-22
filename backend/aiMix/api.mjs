@@ -74,17 +74,19 @@ async function sendAudio(req, res, track) {
   stream.pipe(res);
 }
 
-async function generate(a, b, pair, requestModel) {
+async function generate(a, b, pair, requestModel, { fresh = false } = {}) {
   const systemInstruction = await readFile(PROMPT,"utf8");
   const input = buildInput(a,b,pair);
   const key = createHash("sha256").update(JSON.stringify(["ai-v1",a.fingerprint,b.fingerprint,input,systemInstruction])).digest("hex");
   const folder = new URL("plans/",LIBRARY);
   const file = new URL(key+".json",folder);
-  try {
-    const saved = JSON.parse(await readFile(file,"utf8"));
-    return compileChart(saved.plan,a,b,pair);
-  } catch (error) {
-    if (error.code && error.code !== "ENOENT") throw error;
+  if (!fresh) {
+    try {
+      const saved = JSON.parse(await readFile(file,"utf8"));
+      return compileChart(saved.plan,a,b,pair);
+    } catch (error) {
+      if (error.code && error.code !== "ENOENT") throw error;
+    }
   }
   const audio = await Promise.all([[a, "DECK_A_AUDIO"],[b,"DECK_B_AUDIO"]].map(async ([track,label]) => ({
     label,bytes:await readFile(audioFile(track)),
@@ -113,8 +115,10 @@ async function generate(a, b, pair, requestModel) {
     if (plan.status === "ineligible") throw failure(422,"Gemini rejected this pairing. "+String(plan.eligibility?.reason ?? "").slice(0,160));
     try {
       const result = compileChart(plan,a,b,pair);
-      await mkdir(folder,{recursive:true});
-      await writeFile(file,JSON.stringify(result,null,2)+"\n");
+      if (!fresh) {
+        await mkdir(folder,{recursive:true});
+        await writeFile(file,JSON.stringify(result,null,2)+"\n");
+      }
       return result;
     } catch (error) {
       feedback = "Revise the chart to satisfy this validator: " + error.message;
@@ -153,6 +157,7 @@ export function createAiMixMiddleware({requestModel=requestGemini, readCatalog=c
         const body = await bodyOf(req);
         const a = lookup(body.trackAId), b = lookup(body.trackBId), pair = bestPair(a,b);
         if (!pair) throw failure(422,"These tracks don't have a compatible beat window.");
+        if (body.fresh === true) return json(res,200,await generate(a,b,pair,requestModel,{fresh:true}));
         const key = a.fingerprint + "/" + b.fingerprint;
         let request = requests.get(key);
         if (!request) {

@@ -1603,7 +1603,8 @@
         else if (e.key === 'Enter' || e.key === ' ') { confirm(); e.preventDefault(); }
       }
       if (opts.keyboard !== false) window.addEventListener('keydown', onKey);
-      if (opts.directPick) tracks.forEach(function (track, i) {
+      tracks.forEach(function (track, i) {
+        if (!opts.directPick && !track.directPick) return;
         var hit = document.createElement('button');
         hit.type = 'button'; hit.className = 'flx-record-hit';
         hit.setAttribute('aria-label', 'Choose ' + track.name);
@@ -1743,6 +1744,14 @@
         var beat = reduced ? clock * track.bpm / 60 : sceneBeat;
         var bp = beat - Math.floor(beat), kick = reduced ? 0 : Math.exp(-bp * 7), s = stage.sharp;
         s.fillStyle = hexA(C.void, 0.17 + 0.42 * clamp(clock / 0.8, 0, 1)); s.fillRect(0, 0, W, H);
+        if (opts.generated) {
+          Title.draw(s, 800, 450, { text: 'Generating Track', sub: '', size: 64, maxWidth: 1400, px: 4, beat: beat, t: clock });
+          if (!finished && targetProgress === 1 && clock >= 0.7) {
+            finished = true;
+            opts.onDone?.(track);
+          }
+          return;
+        }
         progress = Math.min(targetProgress, progress + dt / 0.6);
         if (progress >= 1 && countBeat0 === null) countBeat0 = Math.ceil(beat);
         // header: track name in chrome

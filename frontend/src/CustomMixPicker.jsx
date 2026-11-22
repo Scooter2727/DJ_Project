@@ -13,6 +13,15 @@ async function requestMix(path, options) {
   return body;
 }
 
+export function requestMixPlan(trackAId, trackBId, signal, { fresh = false } = {}) {
+  return requestMix("plan", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ trackAId, trackBId, ...(fresh ? { fresh } : {}) }),
+    signal,
+  });
+}
+
 function externalLink(value) {
   return typeof value === "string" && /^https?:\/\//i.test(value) ? value : null;
 }
@@ -182,12 +191,7 @@ export default function CustomMixPicker({ initialGenre, onClose, onReady, onPrev
     planRef.current = controller;
     setBuilding(track.title);
     try {
-      const result = await requestMix("plan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ trackAId: songOne.id, trackBId: track.id }),
-        signal: controller.signal,
-      });
+      const result = await requestMixPlan(songOne.id, track.id, controller.signal);
       if (!controller.signal.aborted) onReady(result);
     } catch (error) {
       if (!controller.signal.aborted) setPlanError(error.message);

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { decodeMidi } from "./midi.js";
 import { MixAudioEngine, createAudioAnalyser } from "./audio.js";
-import CustomMixPicker from "./CustomMixPicker.jsx";
+import CustomMixPicker, { requestMixPlan } from "./CustomMixPicker.jsx";
 import { createMenuMusic } from "./menuMusic.js";
 import { buildMixChart, ROW_BY_CONTROL } from "./mixChart.js";
 import { createMixSession } from "./mixSession.js";
@@ -20,6 +20,7 @@ const DEFAULT_LEVELS_OFFSET_MS = -525;
 const MAINSTAGE_BPM = 126;
 const displayOptions = new URLSearchParams(window.location.search);
 const transitionPreview = displayOptions.get("preview") === "transitions";
+const useCustomPicker = displayOptions.get("mix") === "custom";
 
 function readSavedMixes() {
   try {
@@ -36,7 +37,7 @@ async function loadJson(url, signal) {
 }
 const TRACKS = [
   { id: "mix1", name: "VICE", color: "#34e0ff", icon: "bolt", bpm: MAINSTAGE_BPM },
-  { id: "ai", name: "GEMINI", color: "#ffd43d", icon: "gemini", bpm: MAINSTAGE_BPM },
+  { id: "ai", name: "GEMINI", color: "#ffd43d", icon: "gemini", bpm: MAINSTAGE_BPM, directPick: !useCustomPicker },
 ];
 const GENRE_RECORDS = [
   { id: "edm", name: "EDM", color: "#34e0ff", icon: "bolt", bpm: 128 },
@@ -96,6 +97,8 @@ function MainstageApp() {
   const saveDialogRef = useRef(null);
   const importRef = useRef(null);
   const [aiMix, setAiMix] = useState(null);
+  const [generationError, setGenerationError] = useState("");
+  const [generationAttempt, setGenerationAttempt] = useState(0);
   const [aiControls, setAiControls] = useState({});
   const [aiCue, setAiCue] = useState(null);
   const [musicMuted, setMusicMuted] = useState(() => localStorage.getItem(MUSIC_MUTED_KEY) === "1");
@@ -294,8 +297,14 @@ function MainstageApp() {
             hypeRef.current = createMainstageHype();
           }
           setSelectedTrack(track);
-          if (track.id !== "ai") menuMusicRef.current?.setBrowsing(false);
-          setMode(track.id === "ai" ? "genres" : "loading");
+          if (track.id === "ai" && !useCustomPicker) {
+            setAiMix(null);
+            setGenerationError("");
+            setMode("generating");
+          } else {
+            if (track.id !== "ai") menuMusicRef.current?.setBrowsing(false);
+            setMode(track.id === "ai" ? "genres" : "loading");
+          }
         },
       });
       pageRef.current = select;
@@ -308,9 +317,10 @@ function MainstageApp() {
       return () => { window.removeEventListener("keydown", back); reveal?.remove(); select.destroy(); };
     }
 
-    if (mode === "loading") {
+    if (mode === "loading" || mode === "generating") {
       const loading = api.LoadingScreen.create(mountRef.current, {
         track: selectedTrack,
+        generated: mode === "generating",
         recordPose: recordPoseRef.current, backdrop: menuBackdropRef.current, reducedMotion: !fullMotion,
         onDone: () => {
           if (returnWipeRef.current) return;
@@ -319,7 +329,11 @@ function MainstageApp() {
         },
       });
       pageRef.current = loading;
-      return () => loading.destroy();
+      const back = event => {
+        if (mode === "generating" && event.key === "Escape") setMode("select");
+      };
+      window.addEventListener("keydown", back);
+      return () => { window.removeEventListener("keydown", back); loading.destroy(); };
     }
 
     if (!gameMix) return;
@@ -403,8 +417,10 @@ function MainstageApp() {
   }, [mode, selectedTrack, selectedGenre, gameMix, isAi, previewDeck, readPlayback, loadedMix, fullMotion, getMusicBands]);
 
   useEffect(() => {
-    if (mode === "loading" && mix) pageRef.current?.setProgress(1);
-  }, [mode, mix]);
+    if ((mode === "loading" && (isAi ? aiMix : mix)) || (mode === "generating" && aiMix)) {
+      pageRef.current?.setProgress(1);
+    }
+  }, [mode, mix, aiMix, isAi]);
 
   useEffect(() => {
     screenRef.current?.setWebcam(cameraOn ? cameraVideoRef.current : null);
@@ -612,7 +628,7 @@ function MainstageApp() {
     }
   }
 
-  function openAiMix(result) {
+  const openAiMix = useCallback((result, next = "loading") => {
     menuMusicRef.current?.setBrowsing(false);
     setAiMix(result);
     setAiCue(null);
@@ -621,8 +637,19 @@ function MainstageApp() {
     setPreviewPlaying(false);
     setAiControls(result.recording.events[0].values);
     hypeRef.current = createMainstageHype();
-    setMode("loading");
-  }
+    setMode(next);
+  }, []);
+
+  useEffect(() => {
+    if (mode !== "generating") return;
+    const controller = new AbortController();
+    requestMixPlan("clarity", "where-have-you-been", controller.signal, { fresh: true }).then(result => {
+      if (!controller.signal.aborted && !returnWipeRef.current) openAiMix(result, "generating");
+    }).catch(error => {
+      if (!controller.signal.aborted) setGenerationError(error.message);
+    });
+    return () => controller.abort();
+  }, [mode, generationAttempt, openAiMix]);
 
   function downloadAiChart() {
     const url = URL.createObjectURL(new Blob([JSON.stringify(aiMix, null, 2)], {type:"application/json"}));
@@ -651,7 +678,7 @@ function MainstageApp() {
     {document.fullscreenEnabled && <button className="mainstage-button" onClick={toggleFullscreen}>{fullscreen ? "Exit fullscreen" : "Enter fullscreen"}</button>}
     {transitionPreview ? <nav className="mainstage-controls" aria-label="Transition preview">
       <a className="mainstage-button" href="?motion=full">Play MAINSTAGE</a>
-      <span className="mainstage-status" role="status">{({ title: "Title", select: "Track select", loading: "Loading", game: "Deck" })[mode]}</span>
+      <span className="mainstage-status" role="status">{({ title: "Title", select: "Track select", loading: "Loading", generating: "Loading", game: "Deck" })[mode]}</span>
     </nav> : <div className="mainstage-controls" aria-label="MAINSTAGE controls">
     {mode === "game" && mix && !isAi && <details className="mainstage-dev-settings">
       <summary className="mainstage-button">Dev Settings</summary>
@@ -755,6 +782,16 @@ function MainstageApp() {
     </details>
     <div className="mainstage-stage">
       <div className="mainstage-stage-mount" ref={mountRef} inert={mixComplete} />
+      {mode === "generating" && (generationError
+        ? <div className="mainstage-generation-error">
+            <p role="alert">{generationError}</p>
+            <button className="mainstage-button" onClick={() => {
+              setGenerationError("");
+              setGenerationAttempt(attempt => attempt + 1);
+            }}>Retry</button>
+            <button className="mainstage-button" onClick={() => setMode("select")}>Back to tracks</button>
+          </div>
+        : <div className="flx-cue-status" role="status">Generating Track</div>)}
       {mode === "title" && !transitionPreview && <div className="mainstage-title-overlay">
         <div className="mainstage-title-connect">
           <button className="mainstage-button" disabled={connecting || Boolean(access && port && !connected)}
