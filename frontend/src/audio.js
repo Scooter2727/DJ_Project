@@ -104,6 +104,13 @@ export class MixAudioEngine {
     await Promise.all([this.players.a.play(), this.players.b.play()]);
   }
 
+  loadDecks(deckA, deckB) {
+    this.stop();
+    this.players.a.src = deckA;
+    this.players.b.src = deckB;
+    this.timingDeck = "a";
+  }
+
   pause(deck) {
     this.playRequests[deck]++;
     this.players[deck].pause();
@@ -131,6 +138,7 @@ export class MixAudioEngine {
   stop() {
     for (const [deck, player] of Object.entries(this.players)) {
       this.pause(deck);
+      player.playbackRate = 1;
       player.currentTime = 0;
     }
     this.timingDeck = "a";

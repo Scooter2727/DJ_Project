@@ -73,13 +73,20 @@ export function buildMixChart(recording, manifest, selection = "mix1") {
   const offset = manifest.cueOffsetMs / 1000 - (selection === "levels" ? entry : 0);
   const songTime = t => t / 1000 + offset;
   const curves = {};
-  const notes = [];
+  const aiCues = manifest.kind === "ai" ? recording.cues : null;
+  const notes = (aiCues ?? []).filter(cue => cue.control !== "mixer.crossfade").map(cue => {
+    const [deck, control] = cue.control.split(".");
+    return { channel: deck === "a" ? 1 : 2, row: ROW_BY_CONTROL[control], time: songTime(cue.t),
+      dir: cue.to > cue.from ? "cw" : "ccw", degrees: Math.abs(cue.to - cue.from) / MAX * 180,
+      startPosition: cue.from / MAX, label: cue.label };
+  });
   for (const [control, row] of Object.entries(ROW_BY_CONTROL)) {
     for (const [side, channel] of [["a", 1], ["b", 2]]) {
       if ((selection === "heroes" && side === "b") || (selection === "levels" && side === "a")) continue;
       const positions = recordedPositions(events, side + "." + control);
       if (!positions.length) continue;
       curves[channel + ":" + row] = positions;
+      if (aiCues) continue;
       gestures(controlChanges(positions), (first, base, peak) => {
         const time = songTime(first.t);
         if (time < 0) return;
@@ -90,14 +97,16 @@ export function buildMixChart(recording, manifest, selection = "mix1") {
     }
   }
   notes.sort((a, b) => a.time - b.time);
-  const fades = [];
-  if (selection === "mix1") {
+  const fades = (aiCues ?? []).filter(cue => cue.control === "mixer.crossfade").map(cue => ({
+    start:songTime(cue.t), end:songTime(cue.endMs), to:cue.to/MAX,
+  }));
+  if (selection === "mix1" && !aiCues) {
     const points = controlChanges(recordedPositions(events, "mixer.crossfade"));
     gestures(points, (first, base, peak) => {
       fades.push({ start: songTime(first.t), end: songTime(peak.t), to: peak.value / MAX });
     });
   }
-  return { notes, entry, duration: songTime(recording.durationMs), valuesAt(time) {
+  return { notes, entry, aiCues, aiFades: aiCues ? fades : null, duration: songTime(recording.durationMs), valuesAt(time) {
     return events[indexAt(events, (time - offset) * 1000)].values;
   }, crossfadeCueAt(time) {
     const fade = fades.find(move => move.end >= time);
@@ -119,10 +128,12 @@ export function buildMixChart(recording, manifest, selection = "mix1") {
 
 // Both drawing and MIDI judgments read the media playhead, including after a slow frame.
 export function createMixSource(chart, bpm, readTransport, onFrame) {
-  let screen, unsubscribe, notes, score, combo;
+  let screen, unsubscribe, notes, score, combo, aiFadeIndex;
   function reset(fromTime = 0) {
     notes = chart.notes.map((n, id) => ({ ...n, id, state: n.time < fromTime ? "skipped" : "pending" }));
     score = combo = 0;
+    aiFadeIndex = chart.aiFades?.findIndex(fade => fade.end >= fromTime) ?? -1;
+    if (aiFadeIndex < 0) aiFadeIndex = chart.aiFades?.length ?? 0;
   }
   reset();
   function award(points, multiplier) {
@@ -162,6 +173,15 @@ export function createMixSource(chart, bpm, readTransport, onFrame) {
       const transport = readTransport();
       const { time, demo, playing } = transport;
       if (playing) {
+        const fade = chart.aiFades?.[aiFadeIndex];
+        if (fade && time >= fade.end) {
+          const position = (transport.crossfade ?? 0) / MAX;
+          const error = Math.abs(position - fade.to);
+          if (demo || error <= 0.065) {
+            award(demo || error <= 0.025 ? 300 : 100, 1);
+            aiFadeIndex++;
+          } else if (time - fade.end > 0.2) aiFadeIndex++;
+        }
         for (const n of notes) {
           if (n.time > time) break;
           if (n.state !== "pending") continue;

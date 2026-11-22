@@ -1,3 +1,15 @@
 # Backend
 
 This directory is reserved for the Deck Relay API.
+
+## AI Mix
+
+The AI Mix vinyl presents the imported Rap, Pop, and EDM catalog. Pick a first song, choose a partner that passes the measured beat-grid and tempo checks, and generate a chart. The server sends both MP3s to the Gemini API with the v3 system prompt. A proposed chart must pass timing, cue, overlap, movement-speed, and controller-position validation before the game uses it. Valid charts are cached locally and can be downloaded in the game.
+
+Place the Gemini key in `backend/.env.local` or the server environment as `GEMINI_API_KEY`. The key, imported audio and generated charts are Git-ignored. Start the frontend Vite dev or preview server on localhost to use the same-origin API.
+
+To rebuild the library, install FFmpeg and install `librosa==0.11.0` in a Python environment, then run `python3 backend/aiMix/importLibrary.py ~/Downloads`. The importer expects the supplied `Rap`, `pop`, and `edm` folders and identifies each version by the file contents. It estimates steady sections of the actual decoded files. The app does not force a match for recordings that have no compatible section; `headlines` (Drake) was dropped from the catalog because no window of the decoded audio produced a steady beat grid by either detection method, so it could never be paired. The API's `catalog()` endpoint also filters out any track with zero sections as a safeguard.
+
+For each steady section the importer now also estimates a `downbeatPhase` (0-3) and `downbeatConfidence` from low-frequency periodicity, as a best-guess hint for which beat starts a 4/4 bar. This is a heuristic, not a verified measurement: `buildInput()` only forwards it to Gemini (as `downbeatIndices` / `deckBDownbeatIndices`) when the confidence clears a threshold, and the accompanying note tells Gemini to still listen to the audio for true phrasing since 8/16/32-bar structure remains unavailable.
+
+The importer originally only fit a section's beat grid inside a single 31-second slice, so every section was reported as roughly 31 seconds long no matter how much longer the track actually stayed in time -- and `bestPair()` then hard-capped the usable transition window at 32 beats on top of that, so mixes were always squeezed into about 13-17 seconds near wherever that one slice happened to land. `extend_section()` now walks a fitted section's beat grid forward beat-by-beat past the original 31-second slice, keeping it only as long as each new beat still matches the fitted tempo/phase within the same error budget used elsewhere, so a track that is genuinely steady for minutes is reported that way. `bestPair()`'s cap was raised from a fixed 32 beats to `MAX_OVERLAP_BEATS` (128), scaled by each pair's real validated length, and Deck A's entry point now snaps to a confident downbeat's bar line (`entryFor()`) instead of an arbitrary fixed offset. Gemini is told explicitly that the window may now span many musical phrases and to use the room for a staged, multi-phase transition rather than clustering every move at the start.

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { decodeMidi } from "./midi.js";
 import { MixAudioEngine } from "./audio.js";
+import CustomMixPicker from "./CustomMixPicker.jsx";
 import { buildMixChart, ROW_BY_CONTROL } from "./mixChart.js";
 import { createMixSession } from "./mixSession.js";
 import { DEFAULT_DANCE_CONFIG } from "./crowd/danceScorer.js";
@@ -35,6 +36,7 @@ const TRACKS = [
   { id: "mix1", name: "HEROES / LEVELS", color: "#34e0ff", icon: "bolt", bpm: MAINSTAGE_BPM },
   { id: "heroes", name: "HEROES", color: "#ffb330", icon: "mic", bpm: MAINSTAGE_BPM },
   { id: "levels", name: "LEVELS", color: "#ff3d9a", icon: "star", bpm: MAINSTAGE_BPM },
+  { id: "ai", name: "AI MIX", color: "#b48aff", icon: "bolt", bpm: MAINSTAGE_BPM },
 ];
 
 function MainstageApp() {
@@ -47,6 +49,7 @@ function MainstageApp() {
   const hypeRef = useRef(null);
   const hypeMeterRef = useRef(null);
   const audioRef = useRef(null);
+  const audioFilesRef = useRef(null);
   const playbackButtonState = useRef(false);
   const valuesRef = useRef({});
   const modeRef = useRef("title");
@@ -79,7 +82,11 @@ function MainstageApp() {
   const [mixName, setMixName] = useState("");
   const saveDialogRef = useRef(null);
   const importRef = useRef(null);
-  const gameMix = mode === "game" ? mix : null;
+  const [aiMix, setAiMix] = useState(null);
+  const [aiControls, setAiControls] = useState({});
+  const [aiCue, setAiCue] = useState(null);
+  const isAi = selectedTrack.id === "ai";
+  const gameMix = mode === "game" ? (isAi ? aiMix : mix) : null;
 
   useEffect(() => {
     if (draftMix) saveDialogRef.current?.showModal();
@@ -97,9 +104,11 @@ function MainstageApp() {
   }, []);
 
   function getAudio() {
-    if (!audioRef.current) {
-      audioRef.current = new MixAudioEngine({ deckA: mix.manifest.deckA.file, deckB: mix.manifest.deckB.file });
-    }
+    const { deckA, deckB } = (gameMix ?? mix).manifest;
+    const key = deckA.file + "|" + deckB.file;
+    if (!audioRef.current) audioRef.current = new MixAudioEngine({ deckA: deckA.file, deckB: deckB.file });
+    else if (audioFilesRef.current !== key) audioRef.current.loadDecks(deckA.file, deckB.file);
+    audioFilesRef.current = key;
     return audioRef.current;
   }
   const [previewPlaying, setPreviewPlaying] = useState(false);
@@ -111,8 +120,8 @@ function MainstageApp() {
     const playback = audioRef.current?.playbackPosition();
     if (!playback) return null;
     const deck = playback.deck === "a" ? gameMix?.manifest.deckA : gameMix?.manifest.deckB;
-    return { ...playback, tempo: MAINSTAGE_BPM, beatOffsetMs: (deck?.beatOffsetSeconds ?? 0) * 1000 };
-  }, [gameMix]);
+    return { ...playback, tempo: isAi ? deck?.tempo : MAINSTAGE_BPM, beatOffsetMs: (deck?.beatOffsetSeconds ?? 0) * 1000 };
+  }, [gameMix, isAi]);
 
   const onPoseFrame = useCallback(frame => {
     if (modeRef.current === "game") hypeRef.current.awardFlick(readPlayback(), frame, performance.now());
@@ -180,7 +189,7 @@ function MainstageApp() {
             hypeRef.current = createMainstageHype();
           }
           setSelectedTrack(track);
-          setMode("loading");
+          setMode(track.id === "ai" ? "ai" : "loading");
         },
       });
       pageRef.current = select;
@@ -203,12 +212,17 @@ function MainstageApp() {
       return () => loading.destroy();
     }
 
-    if (!mix) return;
+    if (!gameMix) return;
+    const { manifest, recording } = gameMix;
+    const selection = isAi ? "mix1" : selectedTrack.id;
     const customMix = selectedTrack.id === "mix1" ? loadedMix : null;
-    const chart = buildMixChart(customMix ?? mix.recording,
-      customMix ? { ...mix.manifest, cueOffsetMs: 0 } : mix.manifest, selectedTrack.id);
-    const session = createMixSession(chart, selectedTrack.id, selectedTrack.bpm, {
+    const chart = buildMixChart(customMix ?? recording,
+      customMix ? { ...manifest, cueOffsetMs: 0 } : manifest, selection);
+    const session = createMixSession(chart, selection, isAi ? manifest.deckA.tempo : selectedTrack.bpm, {
       getAudio, liveValues: () => valuesRef.current,
+      aiDecks: isAi ? manifest : null,
+      onMixer: setAiControls,
+      onAiCue: setAiCue,
       onState: next => {
         setTransport(next);
         if (next === "ready" || next === "finished") setIsRecording(false);
@@ -228,7 +242,7 @@ function MainstageApp() {
       source: session.source,
       onCrossfadeInput: value => {
         valuesRef.current = { ...valuesRef.current, "mixer.crossfade": value };
-        session.update(valuesRef.current);
+        session.update(isAi ? {"mixer.crossfade":value} : valuesRef.current);
       },
       knobSmoothing: 0,
       reducedMotion: !fullMotion,
@@ -236,7 +250,7 @@ function MainstageApp() {
       drawWebcamEffects: webcamFiltersRef.current.draw,
       getCrowdHype: dt => {
         const playing = (audioRef.current?.isPlaying(previewDeck) ?? false)
-          || (selectedTrack.id === "mix1" && !!audioRef.current?.isPlaying("b"));
+          || (selection === "mix1" && !!audioRef.current?.isPlaying("b"));
         if (playing !== playbackButtonState.current) {
           playbackButtonState.current = playing;
           setPreviewPlaying(playing);
@@ -264,7 +278,7 @@ function MainstageApp() {
       session.destroy();
       screen.destroy();
     };
-  }, [mode, selectedTrack, gameMix, previewDeck, readPlayback, loadedMix, fullMotion]);
+  }, [mode, selectedTrack, gameMix, isAi, previewDeck, readPlayback, loadedMix, fullMotion]);
 
   useEffect(() => {
     if (mode === "loading" && mix) pageRef.current?.setProgress(1);
@@ -337,7 +351,9 @@ function MainstageApp() {
           const [deck, control] = key.split(".");
           const row = ROW_BY_CONTROL[control];
           if (!screen || !row || deck === "mixer") continue;
-          screen.knob({ channel: deck === "a" ? 1 : 2, row, position: Math.max(0, Math.min(1, value / 16383)) });
+          if (!sessionRef.current.isAi) {
+            screen.knob({ channel: deck === "a" ? 1 : 2, row, position: Math.max(0, Math.min(1, value / 16383)) });
+          }
         }
       }
 
@@ -349,7 +365,12 @@ function MainstageApp() {
         }
       }
       sessionRef.current.recordMidi(bytes);
-      sessionRef.current.update(next);
+      if (sessionRef.current.isAi) {
+        for (const [key, value] of Object.entries(changes)) {
+          if (ROW_BY_CONTROL[key.split(".")[1]]) sessionRef.current.moveAiKnob(key, value);
+        }
+        if ("mixer.crossfade" in changes) sessionRef.current.update({"mixer.crossfade":changes["mixer.crossfade"]});
+      } else sessionRef.current.update(next);
     };
 
     port.addEventListener("midimessage", receive);
@@ -468,17 +489,38 @@ function MainstageApp() {
     }
   }
 
+  function openAiMix(result) {
+    setAiMix(result);
+    setAiCue(null);
+    setTransport("ready");
+    setMessage("");
+    setPreviewPlaying(false);
+    setAiControls(result.recording.events[0].values);
+    hypeRef.current = createMainstageHype();
+    setMode("loading");
+  }
+
+  function downloadAiChart() {
+    const url = URL.createObjectURL(new Blob([JSON.stringify(aiMix, null, 2)], {type:"application/json"}));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = aiMix.manifest.deckA.id + "-" + aiMix.manifest.deckB.id + ".json";
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   const mixActive = transport === "live" || transport === "demo" || transport === "armed";
   const canRecord = mode === "game" && selectedTrack.id === "mix1" && !!mix;
 
   return <main className="mainstage-shell">
+    {mode === "ai" && <CustomMixPicker onClose={() => setMode("select")} onReady={openAiMix} lastMix={aiMix} />}
     <video className="mainstage-camera-source" ref={cameraVideoRef} muted playsInline aria-hidden="true" />
     {mode === "game" && <div className="mainstage-hype-accessible" ref={hypeMeterRef} role="meter" aria-label="Crowd hype" aria-valuemin={0} aria-valuemax={100} aria-valuenow={STARTING_HYPE} />}
     {transitionPreview ? <nav className="mainstage-controls" aria-label="Transition preview">
       <a className="mainstage-button" href="?motion=full">Play MAINSTAGE</a>
       <span className="mainstage-status" role="status">{({ title: "Title", select: "Track select", loading: "Loading", game: "Deck" })[mode]}</span>
     </nav> : <div className="mainstage-controls" aria-label="MAINSTAGE controls">
-    {mode === "game" && mix && <details className="mainstage-dev-settings">
+    {mode === "game" && mix && !isAi && <details className="mainstage-dev-settings">
       <summary className="mainstage-button">Dev Settings</summary>
       <div className="mainstage-dev-panel" role="group" aria-label="Developer tools">
         <div className="mainstage-mix-controls">
@@ -536,8 +578,14 @@ function MainstageApp() {
       <a className="mainstage-button mainstage-preview-link" href="?preview=transitions" target="_blank" rel="noopener">Watch transitions</a>
       {!fullMotion && mode === "title" && <button className="mainstage-button" onClick={() => setFullMotion(true)}>Enable full motion</button>}
       {mode === "game" && <button className="mainstage-button" disabled={isRecording} onClick={() => returnToMenu("select")}>Tracks</button>}
-      {mode === "game" && <button className="mainstage-button" disabled={!mix} onClick={() => sessionRef.current?.togglePlayback()}>
-        {transport === "armed" ? (isRecording ? "Play Deck A" : "Start practice") : previewPlaying ? "Pause track" : "Play track"}
+      {mode === "game" && isAi && <>
+        <button className="mainstage-button" onClick={() => sessionRef.current?.preview()}>
+          {mixActive ? "Stop mix" : "Preview mix"}
+        </button>
+        <button className="mainstage-button" onClick={downloadAiChart}>Download chart</button>
+      </>}
+      {mode === "game" && <button className="mainstage-button" disabled={!gameMix} onClick={() => sessionRef.current?.togglePlayback()}>
+        {transport === "armed" ? (isRecording ? "Play Deck A" : "Start practice") : previewPlaying ? "Pause track" : isAi ? "Play challenge" : "Play track"}
       </button>}
       <button className="mainstage-button" disabled={!mix || connecting} onClick={access ? disconnect : connect}>{connecting ? "Requesting MIDI…" : access ? "Disconnect DDJ" : "Connect DDJ-FLX4"}</button>
       {mode === "game" && <button className="mainstage-button" onClick={toggleCamera}>{cameraFailed ? "Retry camera" : cameraOn ? "Hide camera" : "Use camera"}</button>}
@@ -545,10 +593,29 @@ function MainstageApp() {
         {ports.map(input => <option key={input.id} value={input.id}>{input.name || "MIDI input"}</option>)}
       </select>}
       <span className={connected ? "mainstage-status online" : "mainstage-status"}>{message || (access && !port ? "No MIDI input found. Check the USB data cable." : access && !connected ? "Opening MIDI input…" : connected && !receivingMidi ? "MIDI input open. Move a knob to test." : null) || (cameraOn && camera.status === "error" && camera.message) || (mode === "game" && transport === "finished" ? "Mix complete" :
-        mode === "game" && transport === "ready" && connected ? (selectedTrack.id === "levels" ? "Spin right clockwise to start Levels" : "Spin left counterclockwise to start Heroes") :
-        connected ? "DDJ connected" : selectedTrack.name)}</span>
+        mode === "game" && transport === "ready" && connected ? (selectedTrack.id === "levels" ? "Spin right clockwise to start Levels" : isAi ? "Spin left counterclockwise to start the mix" : "Spin left counterclockwise to start Heroes") :
+        isAi && gameMix ? gameMix.manifest.name : connected ? "DDJ connected" : selectedTrack.name)}</span>
     </div>}
     <div className="mainstage-stage" ref={mountRef} />
+    {mode === "game" && isAi && aiCue?.label && <div className="ai-cue" role="status">{aiCue.label}</div>}
+    {mode === "game" && isAi && gameMix && <details className="ai-mixer">
+      <summary className="mainstage-button">On-screen knobs</summary>
+      <div className="ai-mixer-controls">
+        {["a", "b"].map(deck => <fieldset key={deck}>
+          <legend>Deck {deck.toUpperCase()}</legend>
+          {["high", "mid", "low", "cfx"].map(control => {
+            const key = deck + "." + control;
+            return <label key={key}>{ROW_BY_CONTROL[control]}
+              <input type="range" min="0" max="16383" step="1"
+                aria-label={`Deck ${deck.toUpperCase()} ${ROW_BY_CONTROL[control]}`}
+                disabled={transport !== "live"}
+                value={aiControls[key] ?? 8192}
+                onChange={event => sessionRef.current?.moveAiKnob(key, event.currentTarget.valueAsNumber)} />
+            </label>;
+          })}
+        </fieldset>)}
+      </div>
+    </details>}
     {canRecord && draftMix && <dialog ref={saveDialogRef} className="mainstage-save-dialog" aria-labelledby="save-mix-title"
         onCancel={event => event.preventDefault()}>
         <h2 id="save-mix-title">Name and save your mix</h2>
