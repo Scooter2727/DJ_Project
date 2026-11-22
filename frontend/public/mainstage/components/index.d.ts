@@ -62,7 +62,7 @@ export interface CrowdProps { t: number; e: number; beat: number; }
 
 export declare class Equalizer { constructor(bands?: number); update(dt: number, audio: AudioFrame, t: number): void; drawBank(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, cols: number, rows: number, mirror?: boolean): void; drawMeter(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, rows: number, side: 0 | 1): void; }
 export declare function sampleAudio(time: number, bpm: number): AudioFrame;
-export interface TitleProps { text?: string; sub?: string; size?: number; px?: number; maxWidth?: number; beat?: number; t?: number; }
+export interface TitleProps { text?: string; sub?: string; subSize?: number; size?: number; px?: number; maxWidth?: number; beat?: number; t?: number; }
 export declare const Title: { draw(ctx: CanvasRenderingContext2D, cx: number, cy: number, o?: TitleProps): void };
 export interface Track { id: string; name: string; color: string; icon: 'mic' | 'star' | 'bolt' | 'gemini'; bpm: number; }
 export interface RecordPose { x: number; y: number; size: number; angle: number; }

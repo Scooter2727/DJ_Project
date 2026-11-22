@@ -407,14 +407,17 @@
         _floorCrowd.front.draw(ctx, { t: o.t, e: 0.95, beat: o.beat });
       }
       // road mode: equalizer bars standing along both borders of the moving wedge, receding into the
-      // distance. Sized by perspective; a kick ripples from the stage toward the player.
+      // distance. Sized by perspective; a kick ripples from the stage toward the player. When the
+      // page's background-music analyser is live (o.audioBands, 16 real frequency bands), the bars
+      // track the actual track instead of the synthetic sine-wave fallback below.
       if (o.road) {
-        var nb = 16, bk;
+        var nb = 16, bk, bands = o.audioBands;
         for (bk = nb - 1; bk >= 0; bk--) {                       // far to near so near bars overlap far ones
           var zb = (bk + 0.5) / nb, yb = rowY(zb), sc = (40 + 220 * (yb - top) / span) / 260;
           var ripple = Math.exp(-mod(o.beat - (1 - zb) * 0.5, 1) * 6);
           [-1, 1].forEach(function (sg, si) {
-            var lvl = (0.3 + 0.7 * Math.abs(Math.sin(bk * 1.7 + si * 2.1 + Math.floor(o.beat) * 0.9))) * (0.35 + 0.65 * ripple) * (0.6 + 0.4 * LL);
+            var raw = bands && bands.length ? bands[si ? bk : nb - 1 - bk] : (0.3 + 0.7 * Math.abs(Math.sin(bk * 1.7 + si * 2.1 + Math.floor(o.beat) * 0.9)));
+            var lvl = clamp(raw, 0, 1) * (0.35 + 0.65 * ripple) * (0.6 + 0.4 * LL);
             var bw = 44 * sc + 3, bh = 420 * sc * lvl, step = Math.max(4, 15 * sc), bx = edge(yb, sg) + sg * (bw * 0.6) - bw / 2;
             var cols = [C.cyan, C.violet, C.magenta];
             for (var yy = 0; yy < bh; yy += step) {
@@ -1390,24 +1393,20 @@
       mx.globalCompositeOperation = 'source-over';
       x.drawImage(B.m, 0, 0);
       // upscale: chunky pixels + halo
-      var sc = px * (1 + 0.035 * kick), dw = w * sc, dh = h * sc, dx = cx - (pad + tw / 2) * sc, dy = cy - (pad + fs / 2) * sc - (sub ? size * 0.25 : 0);
+      var sc = px * (1 + 0.035 * kick), dw = w * sc, dh = h * sc, dx = cx - (pad + tw / 2) * sc, dy = cy - (pad + fs / 2) * sc;
       ctx.save();
       ctx.globalCompositeOperation = 'lighter'; ctx.imageSmoothingEnabled = true;
       ctx.globalAlpha = 0.2 + 0.3 * kick; ctx.drawImage(B.c, dx - dw * 0.04, dy - dh * 0.08, dw * 1.08, dh * 1.16);
       ctx.globalAlpha = 0.14; ctx.drawImage(B.c, dx - dw * 0.1, dy - dh * 0.25, dw * 1.2, dh * 1.5);
       ctx.restore();
       ctx.save(); ctx.imageSmoothingEnabled = false; ctx.drawImage(B.c, dx, dy, dw, dh); ctx.restore();
-      // subtitle plate (optional) + EQ bars hanging below the logo, reaching down into the screen
+      // sub-line (optional) + EQ bars hanging below the logo, reaching down into the screen.
+      // The sub-line is drawn with the exact same chrome/extrusion/neon pipeline as the main
+      // text (just smaller and stacked underneath), by recursing into this same function.
       var below = dy + (pad + fs + depth) * sc + size * 0.16;
       if (sub) {
-        var sfs = Math.max(10, Math.round(size * 0.16)), sy = below + sfs;
-        ctx.save(); ctx.font = sfs + 'px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        var sw = ctx.measureText(sub).width + sfs * 2.4;
-        ctx.fillStyle = 'rgba(11,8,20,.85)'; ctx.fillRect(cx - sw / 2, sy - sfs, sw, sfs * 2);
-        ctx.strokeStyle = C.cyan; ctx.lineWidth = 2; ctx.strokeRect(cx - sw / 2 + 0.5, sy - sfs + 0.5, sw - 1, sfs * 2 - 1);
-        ctx.fillStyle = C.cream; ctx.fillText(sub, cx, sy + 1);
-        ctx.restore();
-        below = sy + sfs * 1.6;
+        var subSize = o.subSize || Math.max(18, Math.round(size * 0.42));
+        below = Title.draw(ctx, cx, below + subSize * 0.62, { text: sub, size: subSize, px: o.subPx || px, maxWidth: o.maxWidth, beat: beat, t: t, sub: '' }).below;
       }
       if (o.eq) {
         var bars = o.eqBars || 32, span = dw * (o.eqSpan || 1), bw = span / bars, reach = o.eqDepth || size * 2.4, step = 9;
@@ -1423,17 +1422,22 @@
         }
         ctx.restore();
       }
+      return { below: below };
     }
   };
 
   // ---------------------------------------------------------------- Title backdrop (shared by title + track select)
   // Same stage on both pages so the cut from "turn any knob" to track select is seamless.
   function TitleBackdrop() { this.t = 0; this.floorTravel = 0; }
-  TitleBackdrop.prototype.draw = function (stage, dt, tAbs, bpm, e, warp) {
+  TitleBackdrop.prototype.draw = function (stage, dt, tAbs, bpm, e, warp, getAudioBands) {
     this.t += dt;
     var tempo = (bpm || 128) / 60, beat = this.t * tempo;
     this.floorTravel += dt * tempo * (warp || 0) * 7;
-    var vo = { t: tAbs, e: e == null ? 0.5 : e, beat: beat, road: true, floorTravel: this.floorTravel };
+    // Real frequency bands from the page's background-music analyser, when a user gesture has
+    // unlocked it; null until then, in which case the booth's EQ bars fall back to their own
+    // synthetic animation (see Venue.drawBooth's road-bars block).
+    var audioBands = getAudioBands ? getAudioBands() : null;
+    var vo = { t: tAbs, e: e == null ? 0.5 : e, beat: beat, road: true, floorTravel: this.floorTravel, audioBands: audioBands };
     stage.beginLow();
     Venue.draw(stage.low, vo); Venue.drawBeams(stage.low, vo); bloom(stage.low, 446, 0.5);
     Venue.drawBooth(stage.low, vo); stage.endLow();
@@ -1459,8 +1463,8 @@
       stage.el.addEventListener('click', start);
       stage.run(function (dt, tAbs) {
         clock += dt;
-        var beat = bd.draw(stage, dt, tAbs, opts.bpm, 0.5), s = stage.sharp;
-        Title.draw(s, 800, 300, { text: 'MAINSTAGE', sub: '', size: 110, px: 5, maxWidth: 1240, beat: beat, t: clock });
+        var beat = bd.draw(stage, dt, tAbs, opts.bpm, 0.5, 0, opts.getAudioBands), s = stage.sharp;
+        Title.draw(s, 800, 300, { text: 'MAINSTAGE', sub: 'MIAMI', size: 110, subSize: 108, px: 5, maxWidth: 1240, beat: beat, t: clock });
         s.save(); s.font = '16px ' + FONT; s.textAlign = 'center';
         s.fillStyle = Math.floor(clock * 1.5) % 2 ? C.cream : hexA(C.cream, 0.35);
         s.fillText('CLICK OR TURN ANY KNOB TO START', 800, 800);
@@ -1604,7 +1608,7 @@
         if (opts.preview && clock >= 1.9 && clock - dt < 1.9) select(sel - 1);
         if (opts.preview && clock >= 3 && confirmT < 0) confirm();
         var warp = INTRO ? Math.pow(Math.max(0, 1 - clock / INTRO), 2) : 0;
-        var tr = tracks[sel], beat = bd.draw(stage, dt, tAbs, tr.bpm, 0.55, warp), bp = beat - Math.floor(beat), kick = Math.exp(-bp * 7), s = stage.sharp;
+        var tr = tracks[sel], beat = bd.draw(stage, dt, tAbs, tr.bpm, 0.55, warp, opts.getAudioBands), bp = beat - Math.floor(beat), kick = Math.exp(-bp * 7), s = stage.sharp;
         var pl = INTRO ? eo(clock / 0.7) : 1;   // logo glides up from its title-screen spot
         Title.draw(s, 800, lerp(300, 118, pl), { text: opts.heading || 'MAINSTAGE', sub: '', size: lerp(110, 84, pl), px: 5, maxWidth: lerp(1240, 980, pl), beat: beat, t: clock });
         tracks.forEach(function (t, i) {
