@@ -115,6 +115,8 @@ test("a captured mix replays the recorded crossfader and manual Levels entry", (
   let captured;
   const live = setup("mix1", { onRecording: value => { captured = value; } });
   assert.equal(live.session.startRecording(), true);
+  assert.deepEqual(live.starts, []);
+  live.session.input("a", true, "midi");
   assert.deepEqual(live.starts, ["a"]);
   live.players.a.currentTime = 5;
   live.session.input("b", true, "midi");
@@ -132,6 +134,7 @@ test("a captured mix replays the recorded crossfader and manual Levels entry", (
 
   const saved = JSON.parse(JSON.stringify(captured));
   assert.deepEqual(saved.playButtonEvents, [
+    { t: 0, deck: "a", source: "midi", requestedPlaying: true },
     { t: 5000, deck: "b", source: "midi", requestedPlaying: true },
     { t: 34000, deck: "b", source: "midi", requestedPlaying: false },
   ]);
@@ -150,7 +153,144 @@ test("a captured mix replays the recorded crossfader and manual Levels entry", (
   assert.equal(replay.players.b.paused, true);
 });
 
-test("live cues follow the first deck media position through pauses and manual Deck B entry", async () => {
+test("recording accepts an early right deck start and guided playback keeps the audio and dial cues on the recorded timeline", async () => {
+  let saved;
+  const live = setup("mix1", { onRecording: value => { saved = value; } });
+  live.session.startRecording();
+  live.session.input("a", true, "midi");
+  live.players.a.currentTime = 2;
+  live.session.input("b", true, "jog");
+  await Promise.resolve();
+  assert.deepEqual(live.starts, ["a", "b"]);
+  live.players.a.currentTime = 3;
+  live.players.b.currentTime = 1;
+  live.session.recordMidi([0xb6, 0x1f, 0x5e]);
+  live.session.update({ "mixer.crossfade": 12000, "a.volume": 10000, "a.low": 14000 });
+  live.session.input("b", false, "midi");
+  live.players.a.currentTime = 4;
+  live.session.input("b", true, "midi");
+  await Promise.resolve();
+  live.players.a.currentTime = 5;
+  live.session.stop();
+  assert.deepEqual(saved.levelsEvents, [
+    { t: 2000, position: 0 }, { t: 3000, position: null }, { t: 4000, position: 1 },
+  ]);
+  assert.deepEqual(saved.midiEvents, [[3000, 0xb6, 0x1f, 0x5e]]);
+
+  const practice = setup("mix1", { recordedLevels: saved.levelsEvents }, saved);
+  practice.session.practice();
+  assert.deepEqual(practice.starts, []);
+  assert.equal(practice.frame().jogCues[0].deck, "a");
+  practice.session.input("a", true, "midi");
+  assert.deepEqual(practice.starts, []);
+  practice.session.input("a", true, "jog");
+  assert.equal(practice.frame().jogCues.find(cue => cue.deck === "a").matched, true);
+  practice.players.a.currentTime = 2;
+  practice.session.input("b", true, "jog");
+  assert.equal(practice.frame().jogCues.find(cue => cue.deck === "b").bonus, 300);
+  assert.equal(practice.frame().guided, true);
+  assert.deepEqual(practice.starts, ["a", "b"]);
+  practice.players.a.currentTime = 3;
+  const frame = practice.frame();
+  assert.equal(practice.players.b.paused, true);
+  assert.equal(frame.mixerGuide.target["a.volume"], 10000);
+  assert.equal(practice.mixes.at(-1)["mixer.crossfade"], 12000);
+  assert.ok(frame.notes.some(note => note.row === "LOW" && note.time === 3));
+  practice.turn({ channel: 1, row: "LOW", dir: "cw" });
+  assert.equal(practice.frame().score, 600);
+  practice.players.a.currentTime = 4;
+  assert.equal(practice.frame().jogCues.find(cue => cue.deck === "b").at, 4);
+  assert.equal(practice.players.b.currentTime, 1);
+});
+
+test("recording and replay continue on the right deck after the left track ends", async () => {
+  let saved;
+  const live = setup("mix1", { onRecording: value => { saved = value; } });
+  live.session.startRecording();
+  live.session.input("a", true, "midi");
+  live.players.a.currentTime = 2;
+  live.session.input("b", true, "jog");
+  await Promise.resolve();
+  live.players.a.currentTime = 5;
+  live.players.a.ended = true;
+  live.players.b.currentTime = 3;
+  assert.equal(live.frame().time, 5);
+  live.players.b.currentTime = 4;
+  live.session.update({ "mixer.crossfade": 14000 });
+  live.session.stop();
+  assert.equal(saved.durationMs, 6000);
+  assert.equal(saved.events.at(-1).t, 6000);
+
+  const replay = setup("mix1", { recordedLevels: saved.levelsEvents }, saved);
+  replay.session.preview();
+  replay.players.a.currentTime = 2;
+  replay.frame();
+  replay.players.a.currentTime = 5;
+  replay.players.a.ended = true;
+  replay.players.b.currentTime = 3.5;
+  assert.equal(replay.frame().time, 5.5);
+  assert.equal(replay.players.b.paused, false);
+});
+
+test("Levels offset nudges an already playing deck in real time and rewind replays its adjusted entry", async () => {
+  let delayMs = 0;
+  const { session, players, frame, data } = setup("mix1", { getLevelsDelayMs: () => delayMs });
+  session.preview();
+  const playhead = data.entry + 2;
+  players.a.currentTime = playhead;
+  frame();
+  await Promise.resolve();
+  assert.equal(players.b.currentTime, 1.25);
+
+  delayMs = 25;
+  session.updateLevelsOffset();
+  assert.ok(Math.abs(players.b.currentTime - 1.225) < 1e-9);
+  assert.equal(players.a.currentTime, playhead);
+
+  session.rewind();
+  assert.equal(players.a.currentTime, playhead - 5);
+  assert.equal(players.a.paused, false);
+  assert.equal(players.b.paused, true);
+  assert.equal(players.b.currentTime, 0);
+  players.a.currentTime = data.entry + 0.75;
+  frame();
+  assert.equal(players.b.paused, true);
+  players.a.currentTime += 0.025;
+  frame();
+  assert.equal(players.b.paused, false);
+  assert.ok(players.b.currentTime < 1e-9);
+});
+
+test("live play uses the −525 ms preview entry and blend without overriding scored dials", () => {
+  const options = {
+    getLevelsDelayMs: () => -525,
+    liveValues: () => ({ "mixer.crossfade": 0, "b.volume": 0, "b.low": 9300 }),
+  };
+  const preview = setup("mix1", options);
+  const live = setup("mix1", options);
+  preview.session.preview();
+  live.session.togglePlayback();
+  const entry = live.data.entry + 0.75 - 0.525;
+  for (const mix of [preview, live]) {
+    mix.players.a.currentTime = entry - 0.001;
+    mix.frame();
+    assert.equal(mix.players.b.paused, true);
+    mix.players.a.currentTime = entry;
+    mix.frame();
+    assert.equal(mix.players.b.paused, false);
+    assert.equal(mix.players.b.currentTime, 0);
+    mix.players.a.currentTime = entry + 0.2;
+    mix.players.b.currentTime = 0.15;
+    mix.frame();
+    assert.ok(Math.abs(mix.players.b.currentTime - 0.2) < 1e-9);
+  }
+  live.session.update({ "mixer.crossfade": 0, "b.volume": 0, "b.low": 12000 });
+  assert.equal(live.mixes.at(-1)["mixer.crossfade"], preview.mixes.at(-1)["mixer.crossfade"]);
+  assert.equal(live.mixes.at(-1)["b.volume"], preview.mixes.at(-1)["b.volume"]);
+  assert.equal(live.mixes.at(-1)["b.low"], 12000);
+});
+
+test("live cues follow the first deck media position through pauses and automatic Deck B entry", async () => {
   const { players, session, starts, frame, turn, judgments } = setup();
   session.input("b", true);
   assert.equal(frame().time, 0);
@@ -165,13 +305,12 @@ test("live cues follow the first deck media position through pauses and manual D
   session.input("a", true);
   turn({ channel: 1, row: "LOW", dir: "ccw" });
   assert.equal(judgments[0].judgment, "perfect");
-  for (const [time, cue] of [[20.034, null], [20.284, "3"], [21.284, "2"], [22.284, "1"], [23.283, "SPIN RIGHT"]]) {
+  for (const [time, secondsUntil] of [[20.034, null], [20.284, 3], [21.284, 2], [22.284, 1], [23.283, 0]]) {
     players.a.currentTime = time;
-    assert.equal(frame().entryCue, cue);
-    assert.equal(players.b.paused, true);
+    const [cue] = frame().jogCues;
+    assert.equal(cue ? Math.ceil(cue.remaining) : null, secondsUntil);
+    assert.equal(players.b.paused, secondsUntil !== 0);
   }
-  session.input("b", true);
-  assert.equal(players.b.paused, false);
   session.stop();
   assert.equal(frame().time, 0);
   assert.equal(frame().score, 0);
@@ -186,45 +325,54 @@ test("wheel frames follow each deck independently and freeze when paused", async
   assert.deepEqual(game.wheels.a, { time: 1.25, playing: true });
   assert.deepEqual(game.wheels.b, { time: 0, playing: false });
   players.a.currentTime = chart.entry + 0.75;
-  session.input("b", true);
-  players.b.currentTime = 0.75;
+  frame();
   game = frame();
-  assert.deepEqual(game.wheels.b, { time: 0.75, playing: true });
-  session.input("b", false);
+  assert.deepEqual(game.wheels.b, { time: 0, playing: true });
+  session.input("b", false, "midi");
+  assert.deepEqual(frame().wheels.b, { time: 0, playing: true });
+  session.togglePlayback();
   game = frame();
-  assert.deepEqual(game.wheels.a, { time: chart.entry + 0.75, playing: true });
-  assert.deepEqual(game.wheels.b, { time: 0.75, playing: false });
+  assert.deepEqual(game.wheels.a, { time: chart.entry + 0.75, playing: false });
+  assert.deepEqual(game.wheels.b, { time: 0, playing: false });
 });
 
-test("right deck rejects early spins, arms during countdown, and stays aligned after entry", async () => {
-  const { players, session, frame, starts } = setup();
-  session.input("a", true);
-  await Promise.resolve();
-  players.a.currentTime = chart.entry - 2.26;
-  session.input("b", true);
-  players.a.currentTime = chart.entry + 1;
-  frame();
-  assert.deepEqual(starts, ["a"]);
-  players.a.currentTime = chart.entry - 2.25;
-  session.input("b", true);
-  frame();
-  assert.equal(players.b.paused, true);
-  players.a.currentTime = chart.entry + 0.2;
-  frame();
-  assert.deepEqual(starts, ["a"]);
-  players.a.currentTime = chart.entry + 0.75;
-  frame();
-  assert.deepEqual(starts, ["a", "b"]);
-  assert.equal(players.b.currentTime, 0.75);
-  players.a.currentTime = chart.entry + 5;
-  frame();
-  assert.equal(players.b.currentTime, 5);
-  session.input("b", false);
-  await Promise.resolve();
-  await Promise.resolve();
-  players.a.currentTime = chart.entry + 7;
-  session.input("b", true);
-  assert.equal(players.b.currentTime, 7);
+test("Deck B enters at the preview's −525 ms offset and an optional spin adds points without changing the combo", () => {
+  const oneDialCue = {
+    durationMs: 30000,
+    events: [{ t: 0, values: { "a.low": 8000 } }, { t: 21000, values: { "a.low": 12000 } }],
+  };
+  for (const [spinOffset, points] of [[-1, 0], [-0.22, 100], [0.08, 300], [0.5, 0], [null, 0]]) {
+    const { players, session, frame, starts, data, turn } = setup("mix1", { getLevelsDelayMs: () => -525 }, oneDialCue);
+    const entry = data.entry + 0.75 - 0.525;
+    session.togglePlayback();
+    players.a.currentTime = 21;
+    turn({ channel: 1, row: "LOW", dir: "cw" });
+    assert.equal(frame().combo, 1);
+    const spin = (offset) => {
+      players.a.currentTime = entry + offset;
+      session.input("b", true, "jog");
+    };
+    if (spinOffset !== null && spinOffset < 0) spin(spinOffset);
+    assert.deepEqual(starts, ["a"]);
+    players.a.currentTime = entry - 0.01;
+    frame();
+    assert.equal(players.b.paused, true);
+    players.a.currentTime = entry;
+    frame();
+    assert.deepEqual(starts, ["a", "b"]);
+    assert.equal(players.b.currentTime, 0);
+    if (spinOffset !== null && spinOffset >= 0) spin(spinOffset);
+    players.a.currentTime = entry + 0.6;
+    const resolved = frame();
+    assert.equal(resolved.jogCues[0]?.bonus ?? 0, points);
+    assert.equal(resolved.score, 300 + points);
+    assert.equal(resolved.combo, 1);
+    session.input("b", true, "jog");
+    session.input("b", false, "midi");
+    assert.equal(frame().score, 300 + points);
+    assert.deepEqual(starts, ["a", "b"]);
+    assert.equal(players.b.paused, false);
+  }
 });
 
 test("preview handles a skipped frame at the entry, replays the recorded fade, and ends once", () => {
@@ -236,7 +384,7 @@ test("preview handles a skipped frame at the entry, replays the recorded fade, a
   players.a.currentTime = chart.entry + 0.9;
   frame();
   assert.deepEqual(starts, ["a", "b"]);
-  assert.ok(Math.abs(players.b.currentTime - 0.9) < 0.00001);
+  assert.ok(Math.abs(players.b.currentTime - 0.15) < 0.00001);
   players.a.currentTime = 54;
   frame();
   assert.equal(mixes.at(-1)["mixer.crossfade"], 0);
@@ -265,7 +413,7 @@ test("the on-screen playback control pauses and resumes both decks at their mix 
     players.a.currentTime = chart.entry + 2;
     if (!preview) session.input("b", true);
     frame();
-    players.b.currentTime = 2;
+    players.b.currentTime = 1.25;
 
     session.togglePlayback();
     assert.ok(players.a.paused && players.b.paused);
@@ -273,7 +421,7 @@ test("the on-screen playback control pauses and resumes both decks at their mix 
     session.togglePlayback();
     frame();
     assert.ok(!players.a.paused && !players.b.paused);
-    assert.equal(players.b.currentTime, 2);
+    assert.equal(players.b.currentTime, 1.25);
     assert.equal(session.demo, preview);
   }
 });

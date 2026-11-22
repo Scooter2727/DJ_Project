@@ -74,6 +74,34 @@ body {
   color: #f6ecd6;
 }
 
+.mainstage-dev-settings {
+  position: relative;
+  z-index: 30;
+  padding: 7px 12px;
+}
+
+.mainstage-dev-settings summary {
+  width: max-content;
+}
+
+.mainstage-dev-panel {
+  position: absolute;
+  top: 100%;
+  left: 12px;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: min(680px, calc(100vw - 24px));
+  padding: 12px;
+  border: 1px solid #a983ff;
+  border-radius: 4px;
+  background: #1a1028;
+  box-shadow: 0 6px 24px #0b0814cc;
+}
+
+.mainstage-dev-panel .mainstage-mix-controls + .mainstage-mix-controls {
+  margin-top: 10px;
+}
+
 .mainstage-status {
   overflow: hidden;
   margin-left: auto;
@@ -85,7 +113,7 @@ body {
 
 .mainstage-levels-delay {
   display: inline-flex;
-  flex: none;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   font: 12px/18px "Space Grotesk", system-ui, sans-serif;

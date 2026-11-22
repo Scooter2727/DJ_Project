@@ -12,6 +12,8 @@ import "./mainstage.css";
 
 const ROWS = Object.values(ROW_BY_CONTROL);
 const SAVED_MIXES_KEY = "mainstage-saved-mixes";
+const GUIDE_FORMAT = "mainstage-mix1";
+const DEFAULT_LEVELS_OFFSET_MS = -525;
 
 function readSavedMixes() {
   try {
@@ -57,7 +59,7 @@ function MainstageApp() {
   const [cameraOn, setCameraOn] = useState(false);
   const [mix, setMix] = useState(null);
   const [transport, setTransport] = useState("ready");
-  const [levelsDelayMs, setLevelsDelayMs] = useState(-150);
+  const [levelsDelayMs, setLevelsDelayMs] = useState(DEFAULT_LEVELS_OFFSET_MS);
   const levelsDelayRef = useRef(levelsDelayMs);
   const [savedMixes, setSavedMixes] = useState(readSavedMixes);
   const [chosenMix, setChosenMix] = useState("");
@@ -66,6 +68,7 @@ function MainstageApp() {
   const [draftMix, setDraftMix] = useState(null);
   const [mixName, setMixName] = useState("");
   const saveDialogRef = useRef(null);
+  const importRef = useRef(null);
   const gameMix = mode === "game" ? mix : null;
 
   useEffect(() => {
@@ -202,6 +205,7 @@ function MainstageApp() {
       onError: setMessage,
       getLevelsDelayMs: () => levelsDelayRef.current,
       recordedLevels: customMix?.levelsEvents,
+      recordedPlayButtons: customMix?.playButtonEvents,
       onRecording: recording => {
         if (!recording) return;
         setDraftMix(recording);
@@ -215,7 +219,8 @@ function MainstageApp() {
       show: { venue: true, crowd: true, deck: true, hud: true, webcam: true },
       drawWebcamEffects: webcamFiltersRef.current.draw,
       getCrowdHype: dt => {
-        const playing = audioRef.current?.isPlaying(previewDeck) ?? false;
+        const playing = (audioRef.current?.isPlaying(previewDeck) ?? false)
+          || (selectedTrack.id === "mix1" && !!audioRef.current?.isPlaying("b"));
         if (playing !== playbackButtonState.current) {
           playbackButtonState.current = playing;
           setPreviewPlaying(playing);
@@ -241,7 +246,7 @@ function MainstageApp() {
   useEffect(() => {
     screenRef.current?.setWebcam(cameraOn ? cameraVideoRef.current : null);
     if (!cameraOn || mode !== "game") webcamFiltersRef.current.reset();
-  }, [mode, gameMix, cameraOn]);
+  }, [mode, gameMix, cameraOn, loadedMix]);
 
   useEffect(() => {
     if (!access) return undefined;
@@ -311,11 +316,12 @@ function MainstageApp() {
 
       for (const [deck, jog] of [["a", leftJogTrigger], ["b", rightJogTrigger]]) {
         const key = deck + ".play";
-        if (jog) next[key] = true;
+        if (jog && deck === "a") next[key] = true;
         if (jog || key in changes) {
-          sessionRef.current.input(deck, next[key], key in changes ? "midi" : undefined);
+          sessionRef.current.input(deck, jog || next[key], key in changes ? "midi" : "jog");
         }
       }
+      sessionRef.current.recordMidi(bytes);
       sessionRef.current.update(next);
     };
 
@@ -371,50 +377,125 @@ function MainstageApp() {
     event.preventDefault();
     if (!draftMix || !mixName.trim()) return;
     const recording = { ...draftMix, name: mixName.trim(), id: crypto.randomUUID() };
+    if (storeMix(recording)) setDraftMix(null);
+  }
+
+  function storeMix(recording) {
     const next = [recording, ...savedMixes];
     try {
       localStorage.setItem(SAVED_MIXES_KEY, JSON.stringify(next));
     } catch {
       setMessage("Could not save the mix in this browser.");
-      return;
+      return false;
     }
     setMessage("");
     setSavedMixes(next);
     setChosenMix(recording.id);
     setLoadedMix(recording);
-    setDraftMix(null);
+    return true;
   }
 
-  const mixActive = transport === "live" || transport === "demo";
+  function exportMix() {
+    if (!loadedMix) return;
+    const data = new Blob([JSON.stringify({ format: GUIDE_FORMAT, recording: loadedMix })], { type: "application/json" });
+    const url = URL.createObjectURL(data);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = (loadedMix.name.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "") || "mainstage-mix") + ".json";
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  async function importMix(event) {
+    const file = event.currentTarget.files[0];
+    event.currentTarget.value = "";
+    if (!file) return;
+    try {
+      const { format, recording } = JSON.parse(await file.text());
+      if (format !== GUIDE_FORMAT || typeof recording?.name !== "string"
+        || !Number.isFinite(recording.durationMs) || recording.durationMs <= 0
+        || !recording.events?.length || !Array.isArray(recording.levelsEvents)) throw new Error();
+      const ordered = (events, valid) => Array.isArray(events) && events.every((entry, index) =>
+        Number.isFinite(entry?.t) && entry.t >= (events[index - 1]?.t ?? 0) && entry.t <= recording.durationMs && valid(entry));
+      if (!ordered(recording.events, event => event.values && typeof event.values === "object" && !Array.isArray(event.values)
+        && Object.values(event.values).every(value => typeof value === "boolean" || Number.isFinite(value)))
+        || !ordered(recording.levelsEvents, event => event.position === null || Number.isFinite(event.position) && event.position >= 0)
+        || (recording.playButtonEvents !== undefined && !ordered(recording.playButtonEvents, event =>
+          (event.deck === "a" || event.deck === "b") && typeof event.requestedPlaying === "boolean"))) {
+        throw new Error();
+      }
+      storeMix({ ...recording, name: recording.name.trim().slice(0, 80) || "Imported mix", id: crypto.randomUUID() });
+    } catch {
+      setMessage("Choose a valid MAINSTAGE mix JSON file.");
+    }
+  }
+
+  const mixActive = transport === "live" || transport === "demo" || transport === "armed";
   const canRecord = mode === "game" && selectedTrack.id === "mix1" && !!mix;
 
   return <main className="mainstage-shell">
     <video className="mainstage-camera-source" ref={cameraVideoRef} muted playsInline aria-hidden="true" />
     {mode === "game" && <div className="mainstage-hype-accessible" ref={hypeMeterRef} role="meter" aria-label="Crowd hype" aria-valuemin={0} aria-valuemax={100} aria-valuenow={STARTING_HYPE} />}
+    {mode === "game" && mix && <details className="mainstage-dev-settings">
+      <summary className="mainstage-button">Dev Settings</summary>
+      <div className="mainstage-dev-panel" role="group" aria-label="Developer tools">
+        <div className="mainstage-mix-controls">
+          <button className="mainstage-button" disabled={isRecording || !!draftMix} onClick={() => sessionRef.current?.preview()}>
+            {mixActive ? "Stop mix" : canRecord && loadedMix ? "Watch saved mix" : "Preview mix"}
+          </button>
+          {canRecord && loadedMix && <button className="mainstage-button" disabled={mixActive || !!draftMix}
+            onClick={() => sessionRef.current?.practice()}>Practice saved mix</button>}
+          {canRecord && !loadedMix && <>
+            <button className="mainstage-button" disabled={isRecording || !["live", "demo"].includes(transport)}
+              onClick={() => sessionRef.current?.rewind()}>Rewind 5s</button>
+            <label className="mainstage-levels-delay">
+              Levels start offset
+              <input type="range" min={-2000} max={2000} step={25} value={levelsDelayMs}
+                disabled={isRecording}
+                aria-valuetext={levelsDelayMs === 0 ? "0 milliseconds" : `${Math.abs(levelsDelayMs)} milliseconds ${levelsDelayMs < 0 ? "earlier" : "later"}`}
+                onChange={event => {
+                  const delay = event.currentTarget.valueAsNumber;
+                  levelsDelayRef.current = delay;
+                  setLevelsDelayMs(delay);
+                  sessionRef.current?.updateLevelsOffset();
+                }} />
+              <span>{levelsDelayMs > 0 ? "+" : ""}{levelsDelayMs} ms</span>
+            </label>
+          </>}
+        </div>
+        {canRecord && <div className="mainstage-mix-controls" role="group" aria-label="Mix recordings">
+          <button className="mainstage-button" disabled={(!isRecording && mixActive) || !!draftMix} onClick={() => {
+            if (isRecording) sessionRef.current?.stop();
+            else if (sessionRef.current?.startRecording()) {
+              setMessage("");
+              setIsRecording(true);
+            }
+          }}>{isRecording ? "Stop recording" : "Record mix"}</button>
+          {isRecording && <span role="status">{transport === "armed" ? "Press Play on Deck A to record" : "Recording mix"}</span>}
+          {!isRecording && transport === "armed" && <span role="status">Spin the left jog wheel to start practice</span>}
+          <select className="mainstage-select" aria-label="Saved mix" value={chosenMix}
+            disabled={mixActive || isRecording || !!draftMix} onChange={event => setChosenMix(event.target.value)}>
+            <option value="">Original mix</option>
+            {savedMixes.map(recording => <option key={recording.id} value={recording.id}>{recording.name}</option>)}
+          </select>
+          <button className="mainstage-button" disabled={mixActive || isRecording || !!draftMix}
+            onClick={() => setLoadedMix(savedMixes.find(recording => recording.id === chosenMix) ?? null)}>Load mix</button>
+          <button className="mainstage-button" disabled={!loadedMix || mixActive || !!draftMix} onClick={exportMix}>Export mix</button>
+          <button className="mainstage-button" disabled={mixActive || !!draftMix} onClick={() => importRef.current?.click()}>Import mix</button>
+          <input type="file" accept=".json,application/json" hidden ref={importRef} onChange={importMix} />
+          <span role="status">Loaded: {loadedMix?.name ?? "Original mix"}</span>
+        </div>}
+      </div>
+    </details>}
     <div className="mainstage-stage" ref={mountRef} />
     <div className="mainstage-controls" aria-label="MAINSTAGE controls">
       <button className="mainstage-button" disabled={isRecording} onClick={mode === "title" ? () => setMode("select") : openMainMenu}>
         {mode === "title" ? "Start" : "Main menu"}
       </button>
       {mode === "game" && <button className="mainstage-button" disabled={isRecording} onClick={() => setMode("select")}>Tracks</button>}
-      {mode === "game" && <button className="mainstage-button" disabled={!mix || isRecording || !!draftMix} onClick={() => sessionRef.current?.preview()}>
-        {mixActive ? "Stop mix" : canRecord && loadedMix ? "Play saved mix" : "Preview mix"}
-      </button>}
       {mode === "game" && <button className="mainstage-button" disabled={!mix} onClick={() => sessionRef.current?.togglePlayback()}>
-        {previewPlaying ? "Pause track" : "Play track"}
+        {transport === "armed" ? (isRecording ? "Play Deck A" : "Start practice") : previewPlaying ? "Pause track" : "Play track"}
       </button>}
-      {mode === "game" && selectedTrack.id === "mix1" && <label className="mainstage-levels-delay">
-        Levels intro offset
-        <input type="range" min={-2000} max={2000} step={25} value={levelsDelayMs}
-          disabled={transport === "live" || transport === "demo"}
-          aria-valuetext={levelsDelayMs === 0 ? "Default timing" : `${Math.abs(levelsDelayMs)} milliseconds ${levelsDelayMs < 0 ? "earlier" : "later"}`}
-          onChange={event => {
-            const delay = event.currentTarget.valueAsNumber;
-            levelsDelayRef.current = delay;
-            setLevelsDelayMs(delay);
-          }} />
-        <span>{levelsDelayMs > 0 ? "+" : ""}{levelsDelayMs} ms</span>
-      </label>}
       <button className="mainstage-button" disabled={!mix || connecting} onClick={access ? disconnect : connect}>{connecting ? "Requesting MIDI…" : access ? "Disconnect DDJ" : "Connect DDJ-FLX4"}</button>
       {mode === "game" && <button className="mainstage-button" onClick={toggleCamera}>{cameraFailed ? "Retry camera" : cameraOn ? "Hide camera" : "Use camera"}</button>}
       {ports.length > 1 && <select className="mainstage-select" value={selectedPort} onChange={event => setSelectedPort(event.target.value)} aria-label="MIDI input">
@@ -424,16 +505,7 @@ function MainstageApp() {
         mode === "game" && transport === "ready" && connected ? (selectedTrack.id === "levels" ? "Spin right clockwise to start Levels" : "Spin left counterclockwise to start Heroes") :
         connected ? "DDJ connected" : selectedTrack.name)}</span>
     </div>
-    {canRecord && <div className="mainstage-controls mainstage-mix-controls" aria-label="Mix recordings">
-      <button className="mainstage-button" disabled={(!isRecording && mixActive) || !!draftMix} onClick={() => {
-        if (isRecording) sessionRef.current?.stop();
-        else if (sessionRef.current?.startRecording()) {
-          setMessage("");
-          setIsRecording(true);
-        }
-      }}>{isRecording ? "Stop recording" : "Record mix"}</button>
-      {isRecording && <span role="status">Recording mix</span>}
-      {draftMix && <dialog ref={saveDialogRef} className="mainstage-save-dialog" aria-labelledby="save-mix-title"
+    {canRecord && draftMix && <dialog ref={saveDialogRef} className="mainstage-save-dialog" aria-labelledby="save-mix-title"
         onCancel={event => event.preventDefault()}>
         <h2 id="save-mix-title">Name and save your mix</h2>
         <form className="mainstage-mix-controls" onSubmit={saveMix}>
@@ -444,15 +516,6 @@ function MainstageApp() {
         </form>
         {message && <p role="alert">{message}</p>}
       </dialog>}
-      <select className="mainstage-select" aria-label="Saved mix" value={chosenMix}
-        disabled={mixActive || isRecording || !!draftMix} onChange={event => setChosenMix(event.target.value)}>
-        <option value="">Original mix</option>
-        {savedMixes.map(recording => <option key={recording.id} value={recording.id}>{recording.name}</option>)}
-      </select>
-      <button className="mainstage-button" disabled={mixActive || isRecording || !!draftMix}
-        onClick={() => setLoadedMix(savedMixes.find(recording => recording.id === chosenMix) ?? null)}>Load mix</button>
-      <span role="status">Loaded: {loadedMix?.name ?? "Original mix"}</span>
-    </div>}
   </main>;
 }
 

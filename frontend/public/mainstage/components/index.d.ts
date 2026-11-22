@@ -13,7 +13,7 @@ export interface KnobTrace {
   changes: { fraction: number; position: number }[];
 }
 export interface WheelFrame { time: number; playing: boolean; }
-export interface GameFrame { time: number; bpm: number; approach?: number; notes: LiveNote[]; score: number; combo: number; multiplier?: number; energy?: number; mode?: 'live' | 'keys' | 'demo'; audio?: AudioFrame; traces?: Record<string, KnobTrace | number[]>; recordedMix?: boolean; entryCue?: string | null; wheels?: { a: WheelFrame; b: WheelFrame }; crossfade?: number; }
+export interface GameFrame { time: number; bpm: number; approach?: number; notes: LiveNote[]; score: number; combo: number; multiplier?: number; energy?: number; mode?: 'live' | 'keys' | 'demo'; audio?: AudioFrame; traces?: Record<string, KnobTrace | number[]>; recordedMix?: boolean; entryCue?: string | null; jogCues?: { deck: 'a' | 'b'; at: number; remaining: number; matched: boolean; bonus: number }[]; wheels?: { a: WheelFrame; b: WheelFrame }; crossfade?: number; guided?: boolean; mixerGuide?: { target: Record<string, number>; live: Record<string, number> | null }; }
 export interface GameSource { frame(dt: number): GameFrame; attach?(screen: Screen): void; setRows?(rows: Row[]): void; }
 
 export interface KnobEvent { channel: Channel; row: Row; position?: number; delta?: number; }

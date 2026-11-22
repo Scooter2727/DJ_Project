@@ -1023,6 +1023,26 @@
     });
     ctx.restore();
   }
+  function drawRecordedFaders(ctx, guide) {
+    var faders = [['A VOL', 'a.volume', 16383], ['CROSSFADE', 'mixer.crossfade', 8191],
+      ['B VOL', 'b.volume', 16383], ['MASTER', 'mixer.master', 16383]];
+    ctx.save();
+    plate(ctx, 599, 787, 402, 62);
+    ctx.font = '8px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    faders.forEach(function (fader, i) {
+      var x = 618 + i * 95, y = 824, w = 78, key = fader[1];
+      var target = x + w * clamp((guide.target[key] ?? fader[2]) / 16383, 0, 1);
+      ctx.fillStyle = C.cream; ctx.fillText(fader[0], x + w / 2, 805);
+      ctx.fillStyle = '#555267'; ctx.fillRect(x, y, w, 3);
+      ctx.fillStyle = C.amber; ctx.fillRect(target - 2, y - 6, 4, 14);
+      if (Number.isFinite(guide.live?.[key])) {
+        var live = x + w * clamp(guide.live[key] / 16383, 0, 1);
+        ctx.fillStyle = C.cyan; ctx.fillRect(live - 2, y + 6, 4, 5);
+      }
+    });
+    ctx.restore();
+  }
+
   var HUD = {
     cam: CAM,
     // s: {score, combo, multiplier, energy, mode, beat, hasCrowdHype}
@@ -1053,7 +1073,7 @@
         for (var y = 0; y < hgt; y += 5) ctx.fillRect(W / 2 - 128 + k * 14.4, 60 - y, 10, 3);
       }
       ctx.font = '9px ' + FONT; ctx.textAlign = 'center'; ctx.fillStyle = s.mode === 'live' ? C.cyan : C.amber;
-      ctx.fillText(s.mode === 'live' ? 'LIVE CONTROLLER' : s.mode === 'keys' ? 'KEYBOARD PLAY' : s.recordedMix ? 'MIX PREVIEW' : 'SAMPLE DATA  AUTOPLAY', W / 2, 92);
+      ctx.fillText(s.guided ? 'GUIDED PRACTICE' : s.mode === 'live' ? 'LIVE CONTROLLER' : s.mode === 'keys' ? 'KEYBOARD PLAY' : s.recordedMix ? 'MIX PREVIEW' : 'SAMPLE DATA  AUTOPLAY', W / 2, 92);
       ctx.restore();
     },
     // video: an HTMLVideoElement (or null for the empty slot).
@@ -1468,15 +1488,24 @@
         var trace = f.traces && f.traces[key(n.channel, n.row)];
         Note.draw(s, lane.x + traceOffset(trace, d / approach, L.laneWidth, lane), noteY(L, lane, d, approach, trace), n.dir, { r: L.noteR, tail: n.state === 'pending', alpha: alpha });
       });
-      if (f.entryCue) {
-        var jog = L.P(510 + L.flat.deckOffset[2], 612);
+      function drawJogCue(channel, label, color) {
+        var jog = L.P(510 + L.flat.deckOffset[channel], 612);
         s.save(); s.textAlign = 'center'; s.textBaseline = 'middle';
-        s.font = (f.entryCue === 'SPIN RIGHT' ? '15px ' : '36px ') + FONT;
-        s.lineWidth = 6; s.strokeStyle = C.void; s.strokeText(f.entryCue, jog.x, jog.y);
-        s.fillStyle = C.cream; s.fillText(f.entryCue, jog.x, jog.y); s.restore();
+        s.font = (label.length > 3 ? '15px ' : '36px ') + FONT;
+        s.lineWidth = 6; s.strokeStyle = C.void; s.strokeText(label, jog.x, jog.y);
+        s.fillStyle = color; s.fillText(label, jog.x, jog.y); s.restore();
       }
+      if (f.entryCue) drawJogCue(2, f.entryCue, C.cream);
+      (f.jogCues || []).forEach(function (cue) {
+        var side = cue.deck === 'a' ? 'LEFT' : 'RIGHT';
+        var label = cue.bonus ? '+' + cue.bonus : cue.matched ? 'ON CUE'
+          : 'SPIN ' + side + (cue.remaining > 0 ? ' · ' + Math.ceil(cue.remaining) : '');
+        var color = cue.bonus || cue.matched ? C.laser : C.cream;
+        drawJogCue(cue.deck === 'a' ? 1 : 2, label, color);
+      });
       fx.draw(s);
-      if (show.hud) HUD.draw(s, { score: f.score, combo: f.combo, multiplier: f.multiplier, energy: energy, mode: f.mode, beat: beat, recordedMix: f.recordedMix, hasCrowdHype: Boolean(hype) });
+      if (show.hud) HUD.draw(s, { score: f.score, combo: f.combo, multiplier: f.multiplier, energy: energy, mode: f.mode, beat: beat, recordedMix: f.recordedMix, guided: f.guided, hasCrowdHype: Boolean(hype) });
+      if (show.hud && f.mixerGuide) drawRecordedFaders(s, f.mixerGuide);
       if (show.hud && show.webcam !== false) HUD.drawWebcam(s, webcam, {
         mirror: webcamMirror, t: tAbs, effects: opts.drawWebcamEffects, hype: hype, dt: dt, reducedMotion: reducedMotion
       });

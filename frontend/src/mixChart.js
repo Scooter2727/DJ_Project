@@ -109,20 +109,24 @@ export function buildMixChart(recording, manifest, selection = "mix1") {
 // Both drawing and MIDI judgments read the media playhead, including after a slow frame.
 export function createMixSource(chart, bpm, readTransport, onFrame) {
   let screen, unsubscribe, notes, score, combo;
-  function reset() {
-    notes = chart.notes.map((n, id) => ({ ...n, id, state: "pending" }));
+  function reset(fromTime = 0) {
+    notes = chart.notes.map((n, id) => ({ ...n, id, state: n.time < fromTime ? "skipped" : "pending" }));
     score = combo = 0;
   }
   reset();
+  function applyJudgment(result) {
+    combo = result === "miss" ? 0 : combo + 1;
+    score += (result === "perfect" ? 300 : result === "good" ? 100 : 0) * Math.min(4, 1 + Math.floor(combo / 10));
+  }
   function judge(note, time, result, reason) {
     note.state = result === "miss" ? "miss" : "hit";
     note.judgedAt = time;
-    combo = result === "miss" ? 0 : combo + 1;
-    score += (result === "perfect" ? 300 : result === "good" ? 100 : 0) * Math.min(4, 1 + Math.floor(combo / 10));
+    applyJudgment(result);
     screen.showJudgment({ channel: note.channel, row: note.row, judgment: result, reason });
   }
   return {
     reset,
+    addJogBonus(points) { score += points; },
     attach(view) {
       screen = view;
       unsubscribe = view.onTurn(turn => {
@@ -152,8 +156,8 @@ export function createMixSource(chart, bpm, readTransport, onFrame) {
       const visible = notes.filter(n => n.time <= time + APPROACH && (n.state === "pending" || time - n.judgedAt < 0.35));
       return { time, bpm, approach: APPROACH, notes: visible, score, combo,
         multiplier: Math.min(4, 1 + Math.floor(combo / 10)), mode: demo ? "demo" : "live",
-        audio: transport.audio, entryCue: transport.entryCue, recordedMix: true, traces: chart.tracesAt(time),
-        wheels: transport.wheels, crossfade: transport.crossfade };
+        audio: transport.audio, entryCue: transport.entryCue, jogCues: transport.jogCues, recordedMix: true, traces: chart.tracesAt(time),
+        wheels: transport.wheels, crossfade: transport.crossfade, guided: transport.guided, mixerGuide: transport.mixerGuide };
     },
     destroy() { unsubscribe?.(); }
   };

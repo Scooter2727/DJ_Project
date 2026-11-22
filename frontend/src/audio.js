@@ -58,10 +58,11 @@ export class MixAudioEngine {
 
   update(values) {
     const crossfade = normalized(values["mixer.crossfade"]);
+    const master = normalized(values["mixer.master"] ?? MIDI_MAX);
     const deckAGain = crossfade <= 0.5 ? 1 : 2 * (1 - crossfade);
     const deckBGain = crossfade >= 0.5 ? 1 : 2 * crossfade;
-    smooth(this.nodes.a.volume.gain, deckAGain, this.context);
-    smooth(this.nodes.b.volume.gain, deckBGain, this.context);
+    smooth(this.nodes.a.volume.gain, deckAGain * master * normalized(values["a.volume"] ?? MIDI_MAX), this.context);
+    smooth(this.nodes.b.volume.gain, deckBGain * master * normalized(values["b.volume"] ?? MIDI_MAX), this.context);
 
     for (const deck of ["a", "b"]) {
       const nodes = this.nodes[deck];
