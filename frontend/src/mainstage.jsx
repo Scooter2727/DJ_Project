@@ -33,14 +33,19 @@ async function loadJson(url, signal) {
   return response.json();
 }
 const TRACKS = [
-  { id: "mix1", name: "HEROES / LEVELS", color: "#34e0ff", icon: "bolt", bpm: MAINSTAGE_BPM },
-  { id: "heroes", name: "HEROES", color: "#ffb330", icon: "mic", bpm: MAINSTAGE_BPM },
-  { id: "levels", name: "LEVELS", color: "#ff3d9a", icon: "star", bpm: MAINSTAGE_BPM },
-  { id: "ai", name: "AI MIX", color: "#b48aff", icon: "bolt", bpm: MAINSTAGE_BPM },
+  { id: "mix1", name: "VICE", color: "#34e0ff", icon: "bolt", bpm: MAINSTAGE_BPM },
+  { id: "ai", name: "GEMINI", color: "#ffd43d", icon: "gemini", bpm: MAINSTAGE_BPM },
+];
+const GENRE_RECORDS = [
+  { id: "edm", name: "EDM", color: "#34e0ff", icon: "bolt", bpm: 128 },
+  { id: "rap", name: "RAP", color: "#aa83ff", icon: "mic", bpm: 90 },
+  { id: "pop", name: "POP", color: "#ff3d9a", icon: "star", bpm: 118 },
 ];
 
 function MainstageApp() {
   const mountRef = useRef(null);
+  const toolsRef = useRef(null);
+  const [fullscreen, setFullscreen] = useState(Boolean(document.fullscreenElement));
   const pageRef = useRef(null);
   const screenRef = useRef(null);
   const sessionRef = useRef(null);
@@ -69,6 +74,7 @@ function MainstageApp() {
   const [receivingMidi, setReceivingMidi] = useState(false);
   const [message, setMessage] = useState("");
   const [selectedTrack, setSelectedTrack] = useState(TRACKS[0]);
+  const [selectedGenre, setSelectedGenre] = useState("edm");
   const [cameraOn, setCameraOn] = useState(false);
   const [mix, setMix] = useState(null);
   const [transport, setTransport] = useState("ready");
@@ -87,6 +93,46 @@ function MainstageApp() {
   const [aiCue, setAiCue] = useState(null);
   const isAi = selectedTrack.id === "ai";
   const gameMix = mode === "game" ? (isAi ? aiMix : mix) : null;
+
+  useEffect(() => {
+    const update = () => setFullscreen(Boolean(document.fullscreenElement));
+    const dismiss = event => {
+      const menu = toolsRef.current;
+      if (!menu?.open) return;
+      if (event.type === "keydown") {
+        if (event.key !== "Escape") return;
+        event.preventDefault();
+        event.stopPropagation();
+        menu.querySelector("summary").focus();
+      } else if (menu.contains(event.target)) return;
+      menu.open = false;
+    };
+    document.addEventListener("fullscreenchange", update);
+    document.addEventListener("pointerdown", dismiss);
+    window.addEventListener("keydown", dismiss, true);
+    return () => {
+      document.removeEventListener("fullscreenchange", update);
+      document.removeEventListener("pointerdown", dismiss);
+      window.removeEventListener("keydown", dismiss, true);
+    };
+  }, []);
+
+  function startStage() {
+    if (document.fullscreenEnabled && navigator.userActivation?.isActive && !document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    }
+    setMode("select");
+  }
+
+  async function toggleFullscreen() {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await document.documentElement.requestFullscreen();
+      toolsRef.current.open = false;
+    } catch {
+      setMessage("Fullscreen is unavailable in this window.");
+    }
+  }
 
   useEffect(() => {
     if (draftMix) saveDialogRef.current?.showModal();
@@ -112,7 +158,7 @@ function MainstageApp() {
     return audioRef.current;
   }
   const [previewPlaying, setPreviewPlaying] = useState(false);
-  const previewDeck = selectedTrack.id === "levels" ? "b" : "a";
+  const previewDeck = "a";
   if (hypeRef.current === null) hypeRef.current = createMainstageHype();
   if (webcamFiltersRef.current === null) webcamFiltersRef.current = createWebcamFilters();
 
@@ -139,6 +185,7 @@ function MainstageApp() {
 
   useEffect(() => {
     modeRef.current = mode;
+    if (toolsRef.current) toolsRef.current.open = false;
     return () => {
       returnWipeRef.current?.remove();
       returnWipeRef.current = null;
@@ -165,37 +212,50 @@ function MainstageApp() {
       const title = api.TitleScreen.create(mountRef.current, {
         backdrop: menuBackdropRef.current, bpm: MAINSTAGE_BPM, preview: transitionPreview,
         fadeIn: !returning && fullMotion,
-        keyboard: !transitionPreview, onStart: () => setMode("select"),
+        keyboard: !transitionPreview, onStart: startStage,
       });
       pageRef.current = title;
       const reveal = returning ? api.PixelWipe.run(title.el, { mode: "reveal", duration: 0.6 }) : null;
       return () => { reveal?.remove(); title.destroy(); };
     }
 
-    if (mode === "select") {
+    if (mode === "select" || mode === "genres") {
+      const genres = mode === "genres";
       const returning = revealMenuRef.current === "select";
       revealMenuRef.current = null;
       const select = api.TrackSelect.create(mountRef.current, {
-        tracks: TRACKS,
-        index: returning ? TRACKS.indexOf(selectedTrack) : transitionPreview ? 1 : 0,
+        tracks: genres ? GENRE_RECORDS : TRACKS,
+        heading: genres ? "GEMINI" : "MAINSTAGE",
+        directPick: genres,
+        index: genres ? GENRE_RECORDS.findIndex(record => record.id === selectedGenre)
+          : returning ? TRACKS.indexOf(selectedTrack) : transitionPreview ? 1 : 0,
         backdrop: menuBackdropRef.current, preview: transitionPreview, keyboard: !transitionPreview,
         intro: fullMotion && !returning,
         confirmDelay: fullMotion ? 0.5 : 0,
         onConfirm: (track, index, recordPose) => {
           if (returnWipeRef.current) return;
+          if (genres) {
+            setSelectedGenre(track.id);
+            setMode("ai");
+            return;
+          }
           recordPoseRef.current = recordPose;
           if (track.id !== selectedTrack.id) {
             audioRef.current?.stop();
             hypeRef.current = createMainstageHype();
           }
           setSelectedTrack(track);
-          setMode(track.id === "ai" ? "ai" : "loading");
+          setMode(track.id === "ai" ? "genres" : "loading");
         },
       });
       pageRef.current = select;
       if (!transitionPreview) select.el.focus({ preventScroll: true });
       const reveal = returning && fullMotion ? api.PixelWipe.run(select.el, { mode: "reveal", duration: 0.45 }) : null;
-      return () => { reveal?.remove(); select.destroy(); };
+      const back = event => {
+        if (genres && event.key === "Escape") returnToMenu("select");
+      };
+      window.addEventListener("keydown", back);
+      return () => { window.removeEventListener("keydown", back); reveal?.remove(); select.destroy(); };
     }
 
     if (mode === "loading") {
@@ -278,7 +338,7 @@ function MainstageApp() {
       session.destroy();
       screen.destroy();
     };
-  }, [mode, selectedTrack, gameMix, isAi, previewDeck, readPlayback, loadedMix, fullMotion]);
+  }, [mode, selectedTrack, selectedGenre, gameMix, isAi, previewDeck, readPlayback, loadedMix, fullMotion]);
 
   useEffect(() => {
     if (mode === "loading" && mix) pageRef.current?.setProgress(1);
@@ -335,7 +395,7 @@ function MainstageApp() {
         const changedKnob = Object.keys(changes).some(key => ROW_BY_CONTROL[key.split(".")[1]]);
         if (changedKnob || leftJogDelta || rightJogDelta) setMode("select");
         return;
-      } else if (modeRef.current === "select") {
+      } else if (modeRef.current === "select" || modeRef.current === "genres") {
         if (leftDelta) pageRef.current?.jog({ side: "left", delta: leftDelta });
         if (rightDelta) pageRef.current?.jog({ side: "right", delta: rightDelta });
         if ("a.play" in changes || "b.play" in changes) {
@@ -513,9 +573,12 @@ function MainstageApp() {
   const canRecord = mode === "game" && selectedTrack.id === "mix1" && !!mix;
 
   return <main className="mainstage-shell">
-    {mode === "ai" && <CustomMixPicker onClose={() => setMode("select")} onReady={openAiMix} lastMix={aiMix} />}
+    {mode === "ai" && <CustomMixPicker initialGenre={selectedGenre} onClose={() => setMode("genres")} onReady={openAiMix} />}
     <video className="mainstage-camera-source" ref={cameraVideoRef} muted playsInline aria-hidden="true" />
     {mode === "game" && <div className="mainstage-hype-accessible" ref={hypeMeterRef} role="meter" aria-label="Crowd hype" aria-valuemin={0} aria-valuemax={100} aria-valuenow={STARTING_HYPE} />}
+    <details className="mainstage-tools" ref={toolsRef}>
+    <summary className="mainstage-button mainstage-tools-toggle" aria-label="Stage controls" title="Stage controls">☰</summary>
+    {document.fullscreenEnabled && <button className="mainstage-button" onClick={toggleFullscreen}>{fullscreen ? "Exit fullscreen" : "Enter fullscreen"}</button>}
     {transitionPreview ? <nav className="mainstage-controls" aria-label="Transition preview">
       <a className="mainstage-button" href="?motion=full">Play MAINSTAGE</a>
       <span className="mainstage-status" role="status">{({ title: "Title", select: "Track select", loading: "Loading", game: "Deck" })[mode]}</span>
@@ -572,10 +635,14 @@ function MainstageApp() {
       </div>
     </details>}
 
-      <button className="mainstage-button" disabled={isRecording} onClick={mode === "title" ? () => setMode("select") : () => returnToMenu("title")}>
+      <button className="mainstage-button" disabled={isRecording} onClick={mode === "title" ? startStage : () => returnToMenu("title")}>
         {mode === "title" ? "Start" : "Main menu"}
       </button>
       <a className="mainstage-button mainstage-preview-link" href="?preview=transitions" target="_blank" rel="noopener">Watch transitions</a>
+      {mode === "genres" && <>
+        <button className="mainstage-button gemini-menu-back" onClick={() => returnToMenu("select")}>◀ Back</button>
+        {aiMix && <button className="mainstage-button" onClick={() => openAiMix(aiMix)}>Resume last Gemini mix</button>}
+      </>}
       {!fullMotion && mode === "title" && <button className="mainstage-button" onClick={() => setFullMotion(true)}>Enable full motion</button>}
       {mode === "game" && <button className="mainstage-button" disabled={isRecording} onClick={() => returnToMenu("select")}>Tracks</button>}
       {mode === "game" && isAi && <>
@@ -593,11 +660,9 @@ function MainstageApp() {
         {ports.map(input => <option key={input.id} value={input.id}>{input.name || "MIDI input"}</option>)}
       </select>}
       <span className={connected ? "mainstage-status online" : "mainstage-status"}>{message || (access && !port ? "No MIDI input found. Check the USB data cable." : access && !connected ? "Opening MIDI input…" : connected && !receivingMidi ? "MIDI input open. Move a knob to test." : null) || (cameraOn && camera.status === "error" && camera.message) || (mode === "game" && transport === "finished" ? "Mix complete" :
-        mode === "game" && transport === "ready" && connected ? (selectedTrack.id === "levels" ? "Spin right clockwise to start Levels" : isAi ? "Spin left counterclockwise to start the mix" : "Spin left counterclockwise to start Heroes") :
+        mode === "game" && transport === "ready" && connected ? "Spin left counterclockwise to start the mix" :
         isAi && gameMix ? gameMix.manifest.name : connected ? "DDJ connected" : selectedTrack.name)}</span>
     </div>}
-    <div className="mainstage-stage" ref={mountRef} />
-    {mode === "game" && isAi && aiCue?.label && <div className="ai-cue" role="status">{aiCue.label}</div>}
     {mode === "game" && isAi && gameMix && <details className="ai-mixer">
       <summary className="mainstage-button">On-screen knobs</summary>
       <div className="ai-mixer-controls">
@@ -616,6 +681,9 @@ function MainstageApp() {
         </fieldset>)}
       </div>
     </details>}
+    </details>
+    <div className="mainstage-stage" ref={mountRef} />
+    {mode === "game" && isAi && aiCue?.label && <div className="ai-cue" role="status">{aiCue.label}</div>}
     {canRecord && draftMix && <dialog ref={saveDialogRef} className="mainstage-save-dialog" aria-labelledby="save-mix-title"
         onCancel={event => event.preventDefault()}>
         <h2 id="save-mix-title">Name and save your mix</h2>
@@ -630,4 +698,18 @@ function MainstageApp() {
   </main>;
 }
 
+function renderTitleFavicon() {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 64;
+  const context = canvas.getContext("2d");
+  window.FLXHero.Title.draw(context, 28, 27, {
+    text: "M", sub: "", size: 44, px: 2, beat: 0,
+  });
+  const icon = document.querySelector('link[rel="icon"]');
+  icon.type = "image/png";
+  icon.href = canvas.toDataURL("image/png");
+}
+
+renderTitleFavicon();
+document.fonts.load('22px "Press Start 2P"', "M").then(renderTitleFavicon, () => {});
 createRoot(document.getElementById("root")).render(<MainstageApp />);

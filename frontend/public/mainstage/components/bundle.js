@@ -1463,7 +1463,7 @@
         Title.draw(s, 800, 300, { text: 'MAINSTAGE', sub: '', size: 110, px: 5, maxWidth: 1240, beat: beat, t: clock });
         s.save(); s.font = '16px ' + FONT; s.textAlign = 'center';
         s.fillStyle = Math.floor(clock * 1.5) % 2 ? C.cream : hexA(C.cream, 0.35);
-        s.fillText('TURN ANY KNOB TO START', 800, 800);
+        s.fillText('CLICK OR TURN ANY KNOB TO START', 800, 800);
         if (clock < 0.5 && opts.fadeIn !== false) { s.fillStyle = hexA(C.void, 1 - clock / 0.5); s.fillRect(0, 0, W, H); }
         s.restore();
         if (opts.preview && clock >= 2.6) start();
@@ -1480,7 +1480,8 @@
     // handheld mic, angled: ball grille (holes), collar, handle, curled cable
     mic:  ['........###.', '.......#####', '.......#.#.#', '.......##.##', '......#.###.', '.....###....', '....###.....', '...###......', '..###.......', '.##...#.....', '#...##......', '.###........'],
     star: ['...#...', '..###..', '#######', '.#####.', '..###..', '.##.##.', '##...##'],
-    bolt: ['....##.', '...##..', '..##...', '.######', '...##..', '..##...', '.##....']
+    bolt: ['....##.', '...##..', '..##...', '.######', '...##..', '..##...', '.##....'],
+    gemini: ['.#####.', '##...##', '##.....', '##.....', '##.####', '##...##', '##...##', '.#####.']
   };
   var _vin = null;
   function vinylBuffer() { if (!_vin) { var c = document.createElement('canvas'); c.width = c.height = 64; _vin = { c: c, x: c.getContext('2d') }; } return _vin; }
@@ -1582,6 +1583,18 @@
         else if (e.key === 'Enter' || e.key === ' ') { confirm(); e.preventDefault(); }
       }
       if (opts.keyboard !== false) window.addEventListener('keydown', onKey);
+      if (opts.directPick) tracks.forEach(function (track, i) {
+        var hit = document.createElement('button');
+        hit.type = 'button'; hit.className = 'flx-record-hit';
+        hit.setAttribute('aria-label', 'Choose ' + track.name);
+        hit.style.left = (slots[i] / W * 100) + '%';
+        hit.addEventListener('pointerenter', function () { select(i); });
+        hit.addEventListener('focus', function () { select(i); });
+        hit.addEventListener('click', function (event) {
+          event.stopPropagation(); select(i); confirm();
+        });
+        stage.el.appendChild(hit);
+      });
       stage.el.addEventListener('click', function (e) {
         var r = stage.el.getBoundingClientRect(), x = (e.clientX - r.left) / r.width * W, y = (e.clientY - r.top) / r.height * H;
         for (var i = 0; i < slots.length; i++) if (Math.hypot(x - slots[i], y - discY) < 170) { if (i === sel) confirm(); else select(i); return; }
@@ -1593,14 +1606,7 @@
         var warp = INTRO ? Math.pow(Math.max(0, 1 - clock / INTRO), 2) : 0;
         var tr = tracks[sel], beat = bd.draw(stage, dt, tAbs, tr.bpm, 0.55, warp), bp = beat - Math.floor(beat), kick = Math.exp(-bp * 7), s = stage.sharp;
         var pl = INTRO ? eo(clock / 0.7) : 1;   // logo glides up from its title-screen spot
-        Title.draw(s, 800, lerp(300, 118, pl), { text: 'MAINSTAGE', sub: '', size: lerp(110, 84, pl), px: 5, maxWidth: lerp(1240, 980, pl), beat: beat, t: clock });
-        // plate: CHOOSE YOUR TRACK
-        var pb = INTRO ? eo((clock - 0.35) / 0.4) : 1;   // banner drops in
-        s.save(); s.globalAlpha = pb; s.translate(0, (1 - pb) * -300); s.font = '28px ' + FONT; s.textAlign = 'center'; s.textBaseline = 'middle';
-        var pw = s.measureText('CHOOSE YOUR TRACK').width + 72;
-        s.fillStyle = 'rgba(11,8,20,.85)'; s.fillRect(800 - pw / 2, 236, pw, 60);
-        s.strokeStyle = C.cyan; s.lineWidth = 3; s.strokeRect(800 - pw / 2 + 1.5, 237.5, pw - 3, 57);
-        s.fillStyle = C.cream; s.fillText('CHOOSE YOUR TRACK', 800, 267); s.restore();
+        Title.draw(s, 800, lerp(300, 118, pl), { text: opts.heading || 'MAINSTAGE', sub: '', size: lerp(110, 84, pl), px: 5, maxWidth: lerp(1240, 980, pl), beat: beat, t: clock });
         tracks.forEach(function (t, i) {
           var a = anim[i], on = i === sel;
           a.grow += ((on ? 1 : 0) - a.grow) * Math.min(1, dt * 8);
