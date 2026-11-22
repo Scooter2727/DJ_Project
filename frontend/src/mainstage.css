@@ -23,6 +23,12 @@ body {
   background: radial-gradient(ellipse at center, #251334, #08060e 76%);
 }
 
+@media (orientation: portrait) {
+  :root:not(:fullscreen) .mainstage-stage {
+    position: relative;
+  }
+}
+
 .mainstage-stage .flx-stage {
   width: 100%;
   height: 100%;
@@ -212,10 +218,6 @@ body {
   }
 }
 
-.mainstage-stage {
-  position: relative;
-}
-
 .mainstage-stage-mount {
   display: contents;
 }
@@ -264,4 +266,31 @@ body {
 
 .mainstage-title-midi-status:not(:empty) {
   padding: 3px 7px;
+}
+
+.mainstage-complete {
+  position: absolute;
+  z-index: 40;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  text-align: center;
+  text-shadow: 0 4px 0 #0b0814, 0 0 20px #a879de;
+  animation: mainstage-complete-fade 2.2s ease-in-out both;
+}
+
+.mainstage-complete h2 {
+  margin: 0;
+  font: clamp(18px, 5vw, 64px)/1.35 "Press Start 2P", "Courier New", monospace;
+  text-transform: uppercase;
+}
+
+@keyframes mainstage-complete-fade {
+  0%, 65% { background: rgb(0 0 0 / 55%); }
+  100% { background: #000; color: transparent; text-shadow: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mainstage-complete { animation-timing-function: steps(1, jump-end); }
 }

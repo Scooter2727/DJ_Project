@@ -831,25 +831,24 @@
     var a = xfPt(L, 0, -6, 2), b = xfPt(L, 1, -6, 2);
     ctx.strokeStyle = '#000'; ctx.lineWidth = 12; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
     ctx.strokeStyle = hexA(color, 0.75 + 0.25 * kick); ctx.lineWidth = 3; ctx.stroke();
-    // instruction above the plate, with a fill bar counting down to the move
-    if (cue) {
+    // Show hold timing once the crossfader reaches the target.
+    if (inZone) {
       var destination = Math.abs(cue.to - XF_ZONES[zi].c) < 0.06
         ? (zi === 1 ? 'MIDDLE' : XF_ZONES[zi].label) : Math.round(cue.to * 100) + '%';
-      var word = (inZone ? 'HOLD ' : 'SLIDE TO ') + destination;
+      var word = 'HOLD ' + destination;
       var tp = xfPt(L, 0.5, -88, 2);
       ctx.font = '16px ' + FONT; var tw = ctx.measureText(word).width + 30;
       ctx.fillStyle = 'rgba(8,6,14,.95)'; ctx.fillRect(tp.x - tw / 2, tp.y - 18, tw, 32);
       ctx.strokeStyle = C.cyan; ctx.lineWidth = 3; ctx.strokeRect(tp.x - tw / 2 + 1.5, tp.y - 16.5, tw - 3, 29);
       ctx.fillStyle = hexA(C.cyan, 0.4); ctx.fillRect(tp.x - tw / 2 + 3, tp.y + 8, (tw - 6) * cue.ready, 4);
       ctx.fillStyle = C.cream; ctx.fillText(word, tp.x, tp.y + 2);
-      if (!inZone) {
-        xfQuad(ctx, L, cue.to - 0.045, cue.to + 0.045, -32, 32, 12);
-        ctx.strokeStyle = C.cyan; ctx.lineWidth = 3; ctx.stroke();
-        var dir = cue.to > u ? 1 : -1, s0 = xfPt(L, u + dir * 0.1, -6, 12), s1 = xfPt(L, cue.to - dir * 0.05, -6, 12);
-        ctx.strokeStyle = '#000'; ctx.lineWidth = 11; ctx.beginPath(); ctx.moveTo(s0.x, s0.y); ctx.lineTo(s1.x, s1.y); ctx.stroke();
-        ctx.strokeStyle = C.cyan; ctx.lineWidth = 6; ctx.stroke();
-        ctx.fillStyle = C.cyan; ctx.beginPath(); ctx.moveTo(s1.x + dir * 18, s1.y); ctx.lineTo(s1.x - dir * 3, s1.y - 14); ctx.lineTo(s1.x - dir * 3, s1.y + 14); ctx.closePath(); ctx.fill();
-      }
+    } else if (cue) {
+      xfQuad(ctx, L, cue.to - 0.045, cue.to + 0.045, -32, 32, 12);
+      ctx.strokeStyle = C.cyan; ctx.lineWidth = 3; ctx.stroke();
+      var dir = cue.to > u ? 1 : -1, s0 = xfPt(L, u + dir * 0.1, -6, 12), s1 = xfPt(L, cue.to - dir * 0.05, -6, 12);
+      ctx.strokeStyle = '#000'; ctx.lineWidth = 11; ctx.beginPath(); ctx.moveTo(s0.x, s0.y); ctx.lineTo(s1.x, s1.y); ctx.stroke();
+      ctx.strokeStyle = C.cyan; ctx.lineWidth = 6; ctx.stroke();
+      ctx.fillStyle = C.cyan; ctx.beginPath(); ctx.moveTo(s1.x + dir * 18, s1.y); ctx.lineTo(s1.x - dir * 3, s1.y - 14); ctx.lineTo(s1.x - dir * 3, s1.y + 14); ctx.closePath(); ctx.fill();
     }
     // the cap
     for (var h = 2; h <= 12; h += 2) xfCap(ctx, L, u, h, h === 2 ? '#05040a' : '#3a3940');
@@ -1158,6 +1157,19 @@
         });
       });
       ctx.restore();
+    },
+    drawActiveRails: function (ctx, L, rails) {
+      ctx.save();
+      rails.forEach(function (rail) {
+        var lane = L.lanes[rail.channel]?.[rail.row];
+        if (!lane) return;
+        var x = lane.x + positionOffset(rail.target, lane);
+        var y = guideBottom(L, lane, { position: rail.target, changes: [] });
+        var color = rail.band === 'tight' ? C.laser : rail.band === 'near' ? C.amber : C.cream;
+        circ(ctx, x, y - 5, 6); ctx.fillStyle = C.void; ctx.fill();
+        ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.stroke();
+      });
+      ctx.restore();
     }
   };
 
@@ -1275,22 +1287,26 @@
     cam: CAM,
     draw: function (ctx, s) {
       ctx.save(); ctx.textBaseline = 'alphabetic';
-      plate(ctx, 22, 20, 330, 92, s.outline);
-      ctx.font = '12px ' + FONT; ctx.fillStyle = C.creamDim; ctx.textAlign = 'left'; ctx.fillText('SCORE', 44, 50);
-      ctx.font = '30px ' + FONT; ctx.fillStyle = C.cream; ctx.fillText(pad(s.score, 7), 44, 93);
+      plate(ctx, 22, 20, 330, 120, s.outline);
+      ctx.font = '12px ' + FONT; ctx.fillStyle = C.creamDim; ctx.textAlign = 'left'; ctx.fillText('SCORE', 44, 48);
+      ctx.font = '30px ' + FONT; ctx.fillStyle = C.cream; ctx.fillText(pad(s.score, 7), 44, 91);
+      ctx.font = '10px ' + FONT;
+      ctx.fillStyle = s.award?.milestone ? C.laser : C.cream;
+      ctx.fillText((s.combo || 0) + ' COMBO  x' + (s.multiplier || 1), 44, 120);
+      if (s.hypeBonus > 0) {
+        ctx.textAlign = 'right';
+        ctx.fillStyle = s.hypeBonus === 25 ? C.laser : C.amber;
+        ctx.fillText('HYPE +' + s.hypeBonus + '%', 330, 120);
+      }
       if (s.award) {
         var age = s.clock - s.award.at;
-        var y = 50 - (s.reducedMotion ? 0 : age * 6);
+        var y = 48 - (s.reducedMotion ? 0 : age * 4);
         ctx.save();
         ctx.globalAlpha = clamp((1 - age) / 0.3, 0, 1);
         ctx.textAlign = 'right'; ctx.lineWidth = 4; ctx.strokeStyle = C.void;
-        ctx.font = '13px ' + FONT; ctx.fillStyle = C.amber;
-        var multiplierLabel = 'x' + s.award.multiplier;
-        var pointsX = 330 - ctx.measureText(multiplierLabel).width - 12;
-        ctx.strokeText(multiplierLabel, 330, y); ctx.fillText(multiplierLabel, 330, y);
-        ctx.font = '16px ' + FONT; ctx.fillStyle = C.laser;
-        var label = '+' + s.award.points;
-        ctx.strokeText(label, pointsX, y); ctx.fillText(label, pointsX, y);
+        ctx.font = '10px ' + FONT; ctx.fillStyle = C.laser;
+        var label = (s.award.label || '').toUpperCase() + (s.award.points ? ' +' + s.award.points : '');
+        ctx.strokeText(label, 330, y); ctx.fillText(label, 330, y);
         ctx.restore();
       }
       ctx.restore();
@@ -1610,7 +1626,11 @@
         var warp = INTRO ? Math.pow(Math.max(0, 1 - clock / INTRO), 2) : 0;
         var tr = tracks[sel], beat = bd.draw(stage, dt, tAbs, tr.bpm, 0.55, warp, opts.getAudioBands), bp = beat - Math.floor(beat), kick = Math.exp(-bp * 7), s = stage.sharp;
         var pl = INTRO ? eo(clock / 0.7) : 1;   // logo glides up from its title-screen spot
-        Title.draw(s, 800, lerp(300, 118, pl), { text: opts.heading || 'MAINSTAGE', sub: '', size: lerp(110, 84, pl), px: 5, maxWidth: lerp(1240, 980, pl), beat: beat, t: clock });
+        Title.draw(s, 800, lerp(300, 118, pl), {
+          text: opts.heading || 'MAINSTAGE', sub: opts.subtitle || '',
+          size: lerp(110, 84, pl), subSize: lerp(108, 60, pl),
+          px: 5, maxWidth: lerp(1240, 980, pl), beat: beat, t: clock
+        });
         tracks.forEach(function (t, i) {
           var a = anim[i], on = i === sel;
           a.grow += ((on ? 1 : 0) - a.grow) * Math.min(1, dt * 8);
@@ -1812,7 +1832,7 @@
     }
     var scoreAward = null;
     function showScoreAward(award) {
-      scoreAward = { points: award.points, multiplier: award.multiplier, at: clock };
+      scoreAward = { ...award, at: clock };
     }
     ROWS.forEach(function (r) { [1, 2].forEach(function (ch) { knobs[key(ch, r)] = { pos: 0.5, target: 0.5, angle: 0 }; }); });
 
@@ -1900,7 +1920,7 @@
         drawCrossfader(s, L, xf, clock, lightingBeat, energy, lighting);
       }
       (f.notes || []).forEach(function (n) {
-        if (L.rows.indexOf(n.row) < 0 || n.state === 'hit') return;
+        if (L.rows.indexOf(n.row) < 0 || n.state === 'hit' || n.state === 'tracking') return;
         var d = n.time - f.time; if (d > approach) return;
         var alpha = 1;
         if (n.state === 'miss') { alpha = 1 - (f.time - (n.judgedAt == null ? n.time : n.judgedAt)) / 0.35; if (alpha <= 0) return; }
@@ -1908,6 +1928,7 @@
         var trace = f.traces && f.traces[key(n.channel, n.row)];
         Note.draw(s, lane.x + traceOffset(trace, d / approach, L.laneWidth, lane), noteY(L, lane, d, approach, trace), n.dir, { r: L.noteR, tail: n.state === 'pending', alpha: alpha });
       });
+      if (f.rails?.length) NoteLanes.drawActiveRails(s, L, f.rails);
       if (show.deck) {
         var wheelLabels = (f.jogCues || []).map(function (cue) {
           Deck.drawJogCue(s, L, cue, spb, reducedMotion, clock);
@@ -1919,7 +1940,7 @@
       }
       fx.draw(s);
       if (scoreAward && clock - scoreAward.at >= 1) scoreAward = null;
-      if (show.hud) HUD.draw(s, { score: f.score, award: scoreAward, clock: clock, reducedMotion: reducedMotion, outline: lighting.color });
+      if (show.hud) HUD.draw(s, { score: f.score, combo: f.combo, multiplier: f.multiplier, hypeBonus: f.hypeBonus, award: scoreAward, clock: clock, reducedMotion: reducedMotion, outline: lighting.color });
       if (show.hud && f.mixerGuide) drawRecordedFaders(s, f.mixerGuide);
       if (show.hud && show.webcam !== false) HUD.drawWebcam(s, webcam, {
         mirror: webcamMirror, t: tAbs, effects: opts.drawWebcamEffects, hype: hype, dt: dt, reducedMotion: reducedMotion, outline: lighting.color

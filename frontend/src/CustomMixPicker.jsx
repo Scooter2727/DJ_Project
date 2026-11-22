@@ -44,12 +44,13 @@ function Credits({ track }) {
   </span>;
 }
 
-export default function CustomMixPicker({ initialGenre, onClose, onReady }) {
+export default function CustomMixPicker({ initialGenre, onClose, onReady, onPreviewChange }) {
   const dialogRef = useRef(null);
   const searchRef = useRef(null);
   const titleRef = useRef(null);
   const previewRef = useRef(null);
   const planRef = useRef(null);
+  const onPreviewChangeRef = useRef(onPreviewChange);
   const [genre, setGenre] = useState(initialGenre);
   const [query, setQuery] = useState("");
   const [catalog, setCatalog] = useState({ tracks: [], loading: true, error: "" });
@@ -72,6 +73,7 @@ export default function CustomMixPicker({ initialGenre, onClose, onReady }) {
         previewRef.current.removeAttribute("src");
         previewRef.current.load();
         previewRef.current = null;
+        onPreviewChangeRef.current?.(false);
       }
     };
   }, []);
@@ -104,21 +106,24 @@ export default function CustomMixPicker({ initialGenre, onClose, onReady }) {
     return () => controller.abort();
   }, [songOne, genre, attempt]);
 
-  function stopPreview() {
+  function stopPreview(resumeMenu = true) {
     const audio = previewRef.current;
     previewRef.current = null;
     if (audio) {
       audio.pause();
       audio.removeAttribute("src");
       audio.load();
+      if (resumeMenu) onPreviewChangeRef.current?.(false);
     }
     setPlaying(null);
   }
 
   function listen(track) {
-    stopPreview();
+    const wasPlaying = playing === track.id;
+    stopPreview(wasPlaying);
     setPreviewError("");
-    if (playing === track.id) return;
+    if (wasPlaying) return;
+    onPreviewChangeRef.current?.(true);
     const audio = new Audio(track.file);
     previewRef.current = audio;
     setPlaying(track.id);

@@ -16,6 +16,7 @@ export function createMixSession(chart, selection, bpm, {
   getAudio, liveValues, onState, onError, getLevelsDelayMs = () => 0,
   recordedLevels = null, recordedPlayButtons = [], onRecording = () => {},
   aiDecks = null, onMixer = () => {}, onAiCue = () => {},
+  getHype, onDeckResult, onScoreReset = () => {}, onComplete = () => {},
 }) {
   const master = selection === "levels" ? "b" : "a";
   const startA = aiDecks?.deckA.startSeconds ?? 0;
@@ -25,7 +26,7 @@ export function createMixSession(chart, selection, bpm, {
   const deckBPosition = time => startB + (time - rightCueTime) * rateB;
   const initialValues = chart.valuesAt(0);
   let audio, screen, mode = "ready", lastValues;
-  let liveMixerValues, presetFaders;
+  let liveMixerValues, presetFaders, playerCrossfade;
   let crossfade = initialValues["mixer.crossfade"] ?? 8191;
   let resumeSecond = false;
   let capture, levelsEventIndex = 0, replayLevelsEntry;
@@ -135,7 +136,7 @@ export function createMixSession(chart, selection, bpm, {
     const waitingForSpin = mode === "ready" || mode === "finished" || armedFor === "practice";
     const referenceFader = chart.valuesAt(time)["mixer.crossfade"] ?? crossfade;
     const playing = active && !!player && !player.paused && !player.ended && !player.seeking && player.readyState >= 2;
-    return { time, playing,
+    return { time, playing, playerCrossfade, scoringEnabled: !capture,
       demo: mode === "demo", guided: guided || armedFor === "practice", entryCue, wheels,
       crossfade: mode === "demo" ? referenceFader : (aiDecks ? liveMixerValues?.["mixer.crossfade"] : liveValues()["mixer.crossfade"])
         ?? (capture ? crossfade : active ? referenceFader : initialValues["mixer.crossfade"]),
@@ -146,6 +147,7 @@ export function createMixSession(chart, selection, bpm, {
         ? { target: chart.valuesAt(time), live: guided ? liveValues() : null } : null };
   }
   function stop(next = "ready") {
+    const completed = next === "finished" && !capture;
     finishCapture();
     guided = false;
     armedFor = null;
@@ -159,9 +161,10 @@ export function createMixSession(chart, selection, bpm, {
     audio?.stop();
     resumeSecond = false;
     lastValues = undefined;
-    liveMixerValues = presetFaders = undefined;
+    liveMixerValues = presetFaders = playerCrossfade = undefined;
     if (next === "ready") source.reset();
     state(next);
+    if (completed) onComplete();
   }
   function play(deck, position) {
     if (pending.has(deck)) return;
@@ -238,6 +241,7 @@ export function createMixSession(chart, selection, bpm, {
 
   function start(demo, recording = false) {
     if (mode === "finished" || mode === "armed") source.reset();
+    onScoreReset();
     try {
       if (selection === "mix1" && !aiDecks) refreshLevelsTiming();
       audio = getAudio();
@@ -247,6 +251,7 @@ export function createMixSession(chart, selection, bpm, {
       }
       const values = demo || guided || aiDecks ? initialValues : { ...initialValues, ...liveValues() };
       crossfade = values["mixer.crossfade"] ?? crossfade;
+      playerCrossfade = liveValues()["mixer.crossfade"] ?? crossfade;
       mirrorKnobs(guided ? { ...values, ...liveValues() } : values);
       if (guided) lastValues = values;
       state(demo ? "demo" : "live");
@@ -365,7 +370,7 @@ export function createMixSession(chart, selection, bpm, {
     if (selection === "mix1" && recordedLevels) {
       replayRecordedLevels(time);
     } else if (selection === "mix1" && guided) syncPresetLevels(time);
-  });
+  }, { getHype, onDeckResult });
   const session = {
     source, stop,
     updateLevelsOffset() {
@@ -378,6 +383,7 @@ export function createMixSession(chart, selection, bpm, {
       const time = Math.max(0, mixTime() - REWIND_SECONDS);
       audio.players.a.currentTime = time;
       source.reset(time);
+      onScoreReset();
       rightBonuses.clear();
       syncPresetLevels(time, true);
     },
@@ -438,6 +444,9 @@ export function createMixSession(chart, selection, bpm, {
       if (capture && buttonSource === "midi") playing = audio.players[deck].paused && !pending.has(deck);
       capturePlayButton(deck, buttonSource, playing);
       setDeckPlayback(deck, playing);
+    },
+    inputCrossfade(value) {
+      if (mode === "live" && Number.isFinite(value)) playerCrossfade = Math.max(0, Math.min(16383, value));
     },
     recordMidi(bytes) {
       if (capture) capture.midiEvents.push([mixTime() * 1000, ...bytes]);

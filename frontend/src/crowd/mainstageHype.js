@@ -9,6 +9,7 @@ const MISS_DECAY_PER_SECOND = 3;
 const METER_RESPONSE_SECONDS = 0.35;
 const METER_SETTLED = 0.15;
 const HYPE_GAIN = { perfect: 8, good: 5 };
+const DECK_HYPE_GAIN = { perfect: 6, good: 3, fade: 8 };
 
 export function hypeTier(level) {
   if (level > 75) return 3;
@@ -27,6 +28,7 @@ export function createMainstageHype() {
   let timing = null;
   let beatState = createBeatState();
   let windows = null;
+  let deckMisses = 0;
 
   function syncPlayback(playback) {
     const { deck, tempo, positionMs, beatOffsetMs = 0 } = playback ?? {};
@@ -63,7 +65,17 @@ export function createMainstageHype() {
     decayStartsMs = skippedCueDeadline(result.noteTime, chart.cues, chart.loopMs);
   }
 
-  function frame(playback, dt) {
+  function awardDeck(result) {
+    if (result === "miss") {
+      deckMisses++;
+      return;
+    }
+    if (!Object.hasOwn(DECK_HYPE_GAIN, result)) return;
+    deckMisses = 0;
+    if (!celebration && !returning) target = Math.min(100, target + DECK_HYPE_GAIN[result]);
+  }
+
+  function frame(playback, dt, { danceEnabled = true } = {}) {
     const clock = syncPlayback(playback);
     const active = Boolean(clock && playback.playing);
     const elapsed = Math.min(Math.max(dt, 0), 0.25);
@@ -78,7 +90,8 @@ export function createMainstageHype() {
         celebration = { ...celebration, elapsed: time };
       }
     } else if (returning || active) {
-      if (active && !returning && target < 100 && clock.songTimeMs > decayStartsMs) {
+      const shouldDrain = danceEnabled ? clock?.songTimeMs > decayStartsMs : deckMisses >= 2;
+      if (active && !returning && target < 100 && shouldDrain) {
         target = Math.max(0, target - MISS_DECAY_PER_SECOND * elapsed);
       }
       level = smoothToward(level, target, elapsed, METER_RESPONSE_SECONDS);
@@ -109,7 +122,7 @@ export function createMainstageHype() {
     };
   }
 
-  return { awardFlick, frame };
+  return { awardFlick, awardDeck, frame, scoreState: () => ({ level, celebration }) };
 }
 
 function timerWindowForChart(chart) {

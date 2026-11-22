@@ -110,3 +110,26 @@ test("the audio clock stays anchored to its current deck until that deck stops",
   assert.equal(read().deck, "b");
   assert.equal(read().playing, false);
 });
+
+test("without a camera, deck hits and fades build hype and only repeated deck misses start a drain", () => {
+  const hype = createMainstageHype();
+  const clock = { ...playing, positionMs: 2000 };
+  function settleDeck(seconds = 2) {
+    for (let i = 0; i < seconds * 20; i++) hype.frame(clock, 0.05, { danceEnabled: false });
+    return hype.scoreState().level;
+  }
+  assert.equal(settleDeck(), 60);
+  hype.awardDeck("perfect");
+  hype.awardDeck("good");
+  hype.awardDeck("fade");
+  assert.equal(settleDeck(), 77);
+  hype.awardDeck("miss");
+  assert.equal(settleDeck(), 77);
+  hype.awardDeck("miss");
+  assert.ok(settleDeck(1) < 76);
+  hype.awardDeck("perfect");
+  assert.ok(Math.abs(settleDeck() - 80) < 1e-9);
+  for (let i = 0; i < 4; i++) hype.awardDeck("perfect");
+  assert.equal(settleDeck(), 100);
+  assert.equal(hype.scoreState().celebration.duration, 4);
+});

@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { decodeMidi } from "./midi.js";
 import { MixAudioEngine, createAudioAnalyser } from "./audio.js";
 import CustomMixPicker from "./CustomMixPicker.jsx";
+import { createMenuMusic } from "./menuMusic.js";
 import { buildMixChart, ROW_BY_CONTROL } from "./mixChart.js";
 import { createMixSession } from "./mixSession.js";
 import { DEFAULT_DANCE_CONFIG } from "./crowd/danceScorer.js";
@@ -14,8 +15,6 @@ import "./mainstage.css";
 const ROWS = Object.values(ROW_BY_CONTROL);
 const SAVED_MIXES_KEY = "mainstage-saved-mixes";
 const MUSIC_MUTED_KEY = "mainstage-music-muted";
-const MUSIC_VOLUME = 0.4;
-const MUSIC_VOLUME_IN_GAME = 0.16;
 const GUIDE_FORMAT = "mainstage-mix1";
 const DEFAULT_LEVELS_OFFSET_MS = -525;
 const MAINSTAGE_BPM = 126;
@@ -55,11 +54,13 @@ function MainstageApp() {
   const cameraVideoRef = useRef(null);
   const webcamFiltersRef = useRef(null);
   const hypeRef = useRef(null);
+  const cameraReadyRef = useRef(false);
   const hypeMeterRef = useRef(null);
   const audioRef = useRef(null);
   const audioFilesRef = useRef(null);
   const musicRef = useRef(null);
   const musicAnalyserRef = useRef(null);
+  const menuMusicRef = useRef(null);
   const playbackButtonState = useRef(false);
   const valuesRef = useRef({});
   const modeRef = useRef("title");
@@ -83,6 +84,7 @@ function MainstageApp() {
   const [cameraOn, setCameraOn] = useState(false);
   const [mix, setMix] = useState(null);
   const [transport, setTransport] = useState("ready");
+  const [mixComplete, setMixComplete] = useState(false);
   const [levelsDelayMs, setLevelsDelayMs] = useState(DEFAULT_LEVELS_OFFSET_MS);
   const levelsDelayRef = useRef(levelsDelayMs);
   const [savedMixes, setSavedMixes] = useState(readSavedMixes);
@@ -124,7 +126,6 @@ function MainstageApp() {
   }, []);
 
   function startStage() {
-    unlockMusic();
     if (document.fullscreenEnabled && navigator.userActivation?.isActive && !document.fullscreenElement) {
       document.documentElement.requestFullscreen().catch(() => {});
     }
@@ -145,11 +146,6 @@ function MainstageApp() {
     if (draftMix) saveDialogRef.current?.showModal();
   }, [draftMix]);
 
-  // Background music lives on its own <audio> element outside the mountRef
-  // screens so it survives every mode switch instead of restarting. Browsers
-  // block autoplay until a real user gesture, so this only primes playback --
-  // unlockMusic() (fired from the Start button and the DDJ connect button,
-  // the two earliest gesture points in the app) is what actually starts it.
   useEffect(() => {
     if (musicRef.current) musicRef.current.muted = musicMuted;
     try {
@@ -158,23 +154,34 @@ function MainstageApp() {
   }, [musicMuted]);
 
   useEffect(() => {
-    if (musicRef.current) musicRef.current.volume = mode === "game" ? MUSIC_VOLUME_IN_GAME : MUSIC_VOLUME;
-  }, [mode]);
-
-  function unlockMusic() {
     const music = musicRef.current;
     if (!music) return;
-    music.volume = modeRef.current === "game" ? MUSIC_VOLUME_IN_GAME : MUSIC_VOLUME;
-    // Build the analyser lazily, on the same user gesture that unlocks playback -- an
-    // AudioContext can't be created/resumed without one, and createMediaElementSource can
-    // only be called once per element, so this must happen exactly once.
-    if (!musicAnalyserRef.current) musicAnalyserRef.current = createAudioAnalyser(music);
-    void musicAnalyserRef.current.resume().catch(() => {});
-    void music.play().catch(() => {});
-  }
+    const menuMusic = createMenuMusic(music);
+    menuMusicRef.current = menuMusic;
+    function onGesture(event) {
+      if (!event.isTrusted || !menuMusic.canPlay()) return;
+      if (!musicAnalyserRef.current && typeof AudioContext === "function") {
+        musicAnalyserRef.current = createAudioAnalyser(music);
+      }
+      void musicAnalyserRef.current?.resume().catch(() => {});
+      menuMusic.play();
+    }
+    window.addEventListener("pointerup", onGesture, true);
+    window.addEventListener("keydown", onGesture, true);
+    window.addEventListener("click", onGesture, true);
+    return () => {
+      menuMusicRef.current = null;
+      menuMusic.destroy();
+      window.removeEventListener("pointerup", onGesture, true);
+      window.removeEventListener("keydown", onGesture, true);
+      window.removeEventListener("click", onGesture, true);
+    };
+  }, []);
 
-  // Real frequency data for the title/track-select venue's audio-reactive EQ bars. Falls back to
-  // null (the bundled renderer's own synthetic animation) until a user gesture has unlocked music.
+  useEffect(() => {
+    menuMusicRef.current?.setBrowsing(mode === "title" || mode === "select" || mode === "genres" || mode === "ai");
+  }, [mode]);
+
   const getMusicBands = useCallback(() => musicAnalyserRef.current?.frame().bands ?? null, []);
 
   useEffect(() => {
@@ -219,6 +226,7 @@ function MainstageApp() {
   });
   const { start: startCamera, stop: stopCamera } = camera;
   const cameraFailed = cameraOn && camera.status === "error" && !camera.cameraActive;
+  cameraReadyRef.current = cameraOn && ["tracking", "no-pose"].includes(camera.status);
 
   const F = () => window.FLXHero;
 
@@ -265,6 +273,7 @@ function MainstageApp() {
       const select = api.TrackSelect.create(mountRef.current, {
         tracks: genres ? GENRE_RECORDS : TRACKS,
         heading: genres ? "GEMINI" : "MAINSTAGE",
+        subtitle: "MIAMI",
         directPick: genres,
         index: genres ? GENRE_RECORDS.findIndex(record => record.id === selectedGenre)
           : returning ? TRACKS.indexOf(selectedTrack) : transitionPreview ? 1 : 0,
@@ -285,6 +294,7 @@ function MainstageApp() {
             hypeRef.current = createMainstageHype();
           }
           setSelectedTrack(track);
+          if (track.id !== "ai") menuMusicRef.current?.setBrowsing(false);
           setMode(track.id === "ai" ? "genres" : "loading");
         },
       });
@@ -323,6 +333,17 @@ function MainstageApp() {
       aiDecks: isAi ? manifest : null,
       onMixer: setAiControls,
       onAiCue: setAiCue,
+      getHype: () => hypeRef.current.scoreState(),
+      onDeckResult: result => {
+        if (!cameraReadyRef.current) hypeRef.current.awardDeck(result);
+      },
+      onScoreReset: () => {
+        hypeRef.current = createMainstageHype();
+      },
+      onComplete: () => {
+        modeRef.current = "completing";
+        setMixComplete(true);
+      },
       onState: next => {
         setTransport(next);
         if (next === "ready" || next === "finished") setIsRecording(false);
@@ -341,6 +362,7 @@ function MainstageApp() {
       rows: ROWS,
       source: session.source,
       onCrossfadeInput: value => {
+        session.inputCrossfade(value);
         valuesRef.current = { ...valuesRef.current, "mixer.crossfade": value };
         session.update(isAi ? {"mixer.crossfade":value} : valuesRef.current);
       },
@@ -355,7 +377,7 @@ function MainstageApp() {
           playbackButtonState.current = playing;
           setPreviewPlaying(playing);
         }
-        const frame = hypeRef.current.frame(readPlayback(), dt);
+        const frame = hypeRef.current.frame(readPlayback(), dt, { danceEnabled: cameraReadyRef.current });
         const value = String(Math.floor(frame.level));
         const meter = hypeMeterRef.current;
         if (meter && meter.getAttribute("aria-valuenow") !== value) meter.setAttribute("aria-valuenow", value);
@@ -445,7 +467,7 @@ function MainstageApp() {
         }
         return;
       } else {
-        if (!sessionRef.current || sessionRef.current.demo) return;
+        if (modeRef.current !== "game" || !sessionRef.current || sessionRef.current.demo) return;
         const screen = screenRef.current;
         for (const [key, value] of Object.entries(changes)) {
           const [deck, control] = key.split(".");
@@ -464,6 +486,7 @@ function MainstageApp() {
           sessionRef.current.input(deck, jog || next[key], key in changes ? "midi" : "jog");
         }
       }
+      if ("mixer.crossfade" in changes) sessionRef.current.inputCrossfade(changes["mixer.crossfade"]);
       sessionRef.current.recordMidi(bytes);
       if (sessionRef.current.isAi) {
         for (const [key, value] of Object.entries(changes)) {
@@ -491,7 +514,6 @@ function MainstageApp() {
       if (!navigator.requestMIDIAccess) throw new Error("Use desktop Chrome or Edge on localhost for Web MIDI.");
       // Start audio unlock from the click, but let MIDI connect independently.
       void Promise.resolve().then(() => getAudio().resume()).catch(() => {});
-      unlockMusic();
       const nextAccess = await navigator.requestMIDIAccess();
       setAccess(nextAccess);
     } catch (error) {
@@ -515,7 +537,7 @@ function MainstageApp() {
     else setCameraOn(current => !current);
   }
 
-  function returnToMenu(next) {
+  function returnToMenu(next, { wipe = true } = {}) {
     if (returnWipeRef.current) return;
     if (next === "title") {
       setCameraOn(false);
@@ -523,7 +545,7 @@ function MainstageApp() {
     }
     sessionRef.current?.stop();
     const page = pageRef.current;
-    if (!page?.el || !fullMotion) {
+    if (!wipe || !page?.el || !fullMotion) {
       setMode(next);
       return;
     }
@@ -591,6 +613,7 @@ function MainstageApp() {
   }
 
   function openAiMix(result) {
+    menuMusicRef.current?.setBrowsing(false);
     setAiMix(result);
     setAiCue(null);
     setTransport("ready");
@@ -619,10 +642,11 @@ function MainstageApp() {
 
   return <main className="mainstage-shell">
     <audio ref={musicRef} src="/audio/background-music.mp3" loop preload="auto" muted={musicMuted} aria-hidden="true" />
-    {mode === "ai" && <CustomMixPicker initialGenre={selectedGenre} onClose={() => setMode("genres")} onReady={openAiMix} />}
+    {mode === "ai" && <CustomMixPicker initialGenre={selectedGenre} onClose={() => setMode("genres")} onReady={openAiMix}
+      onPreviewChange={active => menuMusicRef.current?.setPreviewing(active)} />}
     <video className="mainstage-camera-source" ref={cameraVideoRef} muted playsInline aria-hidden="true" />
     {mode === "game" && <div className="mainstage-hype-accessible" ref={hypeMeterRef} role="meter" aria-label="Crowd hype" aria-valuemin={0} aria-valuemax={100} aria-valuenow={STARTING_HYPE} />}
-    <details className="mainstage-tools" ref={toolsRef}>
+    <details className="mainstage-tools" ref={toolsRef} hidden={mixComplete}>
     <summary className="mainstage-button mainstage-tools-toggle" aria-label="Stage controls" title="Stage controls">☰</summary>
     {document.fullscreenEnabled && <button className="mainstage-button" onClick={toggleFullscreen}>{fullscreen ? "Exit fullscreen" : "Enter fullscreen"}</button>}
     {transitionPreview ? <nav className="mainstage-controls" aria-label="Transition preview">
@@ -706,7 +730,7 @@ function MainstageApp() {
       {ports.length > 1 && <select className="mainstage-select" value={selectedPort} onChange={event => setSelectedPort(event.target.value)} aria-label="MIDI input">
         {ports.map(input => <option key={input.id} value={input.id}>{input.name || "MIDI input"}</option>)}
       </select>}
-      <span className={connected ? "mainstage-status online" : "mainstage-status"}>{(mode !== "title" && midiStatus) || (cameraOn && camera.status === "error" && camera.message) || (mode === "game" && transport === "finished" ? "Mix complete" :
+      <span className={connected ? "mainstage-status online" : "mainstage-status"}>{(mode !== "title" && midiStatus) || (cameraOn && camera.status === "error" && camera.message) || (
         mode === "game" && transport === "ready" && connected ? "Spin left counterclockwise to start the mix" :
         isAi && gameMix ? gameMix.manifest.name : connected ? "DDJ connected" : selectedTrack.name)}</span>
     </div>}
@@ -718,7 +742,7 @@ function MainstageApp() {
           {["high", "mid", "low", "cfx"].map(control => {
             const key = deck + "." + control;
             return <label key={key}>{ROW_BY_CONTROL[control]}
-              <input type="range" min="0" max="16383" step="1"
+              <input type="range" min="0" max="16383" step="128"
                 aria-label={`Deck ${deck.toUpperCase()} ${ROW_BY_CONTROL[control]}`}
                 disabled={transport !== "live"}
                 value={aiControls[key] ?? 8192}
@@ -730,7 +754,7 @@ function MainstageApp() {
     </details>}
     </details>
     <div className="mainstage-stage">
-      <div className="mainstage-stage-mount" ref={mountRef} />
+      <div className="mainstage-stage-mount" ref={mountRef} inert={mixComplete} />
       {mode === "title" && !transitionPreview && <div className="mainstage-title-overlay">
         <div className="mainstage-title-connect">
           <button className="mainstage-button" disabled={connecting || Boolean(access && port && !connected)}
@@ -742,6 +766,12 @@ function MainstageApp() {
         </div>
       </div>}
     </div>
+    {mode === "game" && mixComplete && <div className="mainstage-complete" role="status" onAnimationEnd={() => {
+      setMixComplete(false);
+      returnToMenu("title", { wipe: false });
+    }}>
+      <h2>Mix complete</h2>
+    </div>}
     {mode === "game" && isAi && aiCue?.label && <div className="ai-cue" role="status">{aiCue.label}</div>}
     {canRecord && draftMix && <dialog ref={saveDialogRef} className="mainstage-save-dialog" aria-labelledby="save-mix-title"
         onCancel={event => event.preventDefault()}>

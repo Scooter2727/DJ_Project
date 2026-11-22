@@ -4,7 +4,7 @@ export type Channel = 1 | 2;
 export type Dir = 'cw' | 'ccw';
 export type Judgment = 'perfect' | 'good' | 'miss';
 
-export interface LiveNote { id: string | number; channel: Channel; row: Row; dir: Dir; time: number; state: 'pending' | 'hit' | 'miss'; judgedAt?: number; degrees?: number; startPosition?: number; }
+export interface LiveNote { id: string | number; channel: Channel; row: Row; dir: Dir; time: number; state: 'pending' | 'tracking' | 'hit' | 'miss'; judgedAt?: number; degrees?: number; startPosition?: number; }
 export interface AudioFrame { kick: number; bass: number; hats: number; energy: number; bands?: number[]; level?: [number, number]; }
 export interface KnobTrace {
   /** Recorded knob position now, from full counterclockwise (0) to full clockwise (1). */
@@ -13,7 +13,7 @@ export interface KnobTrace {
   changes: { fraction: number; position: number }[];
 }
 export interface WheelFrame { time: number; playing: boolean; }
-export interface GameFrame { time: number; bpm: number; approach?: number; notes: LiveNote[]; score: number; combo: number; multiplier?: number; energy?: number; mode?: 'live' | 'keys' | 'demo'; audio?: AudioFrame; traces?: Record<string, KnobTrace | number[]>; recordedMix?: boolean; entryCue?: string | null; jogCues?: { deck: 'a' | 'b'; at: number; remaining: number; lead?: number; matched: boolean; bonus: number }[]; wheels?: { a: WheelFrame; b: WheelFrame }; crossfade?: number; crossfadeCue?: { to: number; ready: number } | null; guided?: boolean; mixerGuide?: { target: Record<string, number>; live: Record<string, number> | null }; }
+export interface GameFrame { time: number; bpm: number; approach?: number; notes: LiveNote[]; rails?: { channel: 1 | 2; row: Row; target: number; band: "tight" | "near" | "off" }[]; score: number; combo: number; multiplier?: number; hypeBonus?: number; energy?: number; mode?: 'live' | 'keys' | 'demo'; audio?: AudioFrame; traces?: Record<string, KnobTrace | number[]>; recordedMix?: boolean; entryCue?: string | null; jogCues?: { deck: 'a' | 'b'; at: number; remaining: number; lead?: number; matched: boolean; bonus: number }[]; wheels?: { a: WheelFrame; b: WheelFrame }; crossfade?: number; crossfadeCue?: { to: number; ready: number } | null; guided?: boolean; mixerGuide?: { target: Record<string, number>; live: Record<string, number> | null }; }
 export interface GameSource { frame(dt: number): GameFrame; attach?(screen: Screen): void; setRows?(rows: Row[]): void; }
 
 export interface KnobEvent { channel: Channel; row: Row; position?: number; delta?: number; }
@@ -44,7 +44,7 @@ export interface Screen {
   el: HTMLElement;
   knob(ev: KnobEvent): Turn | null;
   showJudgment(ev: { channel: Channel; row: Row; judgment: Judgment; reason?: 'wrong-way' }): void;
-  showScoreAward?(award: { points: number; multiplier: number }): void;
+  showScoreAward?(award: { points: number; multiplier: number; label?: string; milestone?: boolean }): void;
   onTurn(fn: (t: Turn) => void): () => void;
   setSource(src: GameSource): void;
   setRows(rows: Row[]): void;
@@ -69,7 +69,7 @@ export interface RecordPose { x: number; y: number; size: number; angle: number;
 export declare class TitleBackdrop { t: number; floorTravel: number; }
 export declare const TitleScreen: { create(el: HTMLElement, opts?: { backdrop?: TitleBackdrop; bpm?: number; preview?: boolean; keyboard?: boolean; fadeIn?: boolean; onStart?(): void }): { el: HTMLElement; start(): void; destroy(): void } };
 export interface TrackSelectPage { el: HTMLElement; jog(ev: { side: 'left' | 'right'; delta: number }): void; knob(ev: KnobEvent): void; select(i: number): void; next(): void; prev(): void; confirm(): void; selected(): Track; destroy(): void; }
-export declare const TrackSelect: { create(el: HTMLElement, opts?: { tracks?: Track[]; heading?: string; directPick?: boolean; index?: number; backdrop?: TitleBackdrop; preview?: boolean; keyboard?: boolean; intro?: boolean; confirmDelay?: number; onChange?(t: Track, i: number): void; onConfirm?(t: Track, i: number, recordPose?: RecordPose): void }): TrackSelectPage };
+export declare const TrackSelect: { create(el: HTMLElement, opts?: { tracks?: Track[]; heading?: string; subtitle?: string; directPick?: boolean; index?: number; backdrop?: TitleBackdrop; preview?: boolean; keyboard?: boolean; intro?: boolean; confirmDelay?: number; onChange?(t: Track, i: number): void; onConfirm?(t: Track, i: number, recordPose?: RecordPose): void }): TrackSelectPage };
 export declare const PixelWipe: { run(el: HTMLElement, opts?: { mode?: 'cover' | 'reveal'; duration?: number; color?: string; onDone?(canvas: HTMLCanvasElement): void }): { el: HTMLCanvasElement; remove(): void } };
 export declare const LoadingScreen: { create(el: HTMLElement, opts?: { track?: Track; backdrop?: TitleBackdrop; reducedMotion?: boolean; recordPose?: RecordPose; onDone?(track: Track): void }): { el: HTMLElement; setProgress(progress: number): void; destroy(): void } };
 export declare const TRACKS: Track[];

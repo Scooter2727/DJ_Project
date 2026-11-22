@@ -1,3 +1,5 @@
+import { createMixScoring, hypeBonus } from "./mixScoring.js";
+
 export const ROW_BY_CONTROL = { trim: "TRIM", high: "HI", mid: "MID", low: "LOW", cfx: "CFX" };
 const MAX = 16383;
 const DEAD_BAND = 256;
@@ -66,6 +68,34 @@ function gestures(points, emit) {
   if (sign) emit(points[first], points[base], points[peak]);
 }
 
+const MIN_RAIL_SECONDS = 0.18;
+const TIGHT_TOLERANCE = 0.045;
+const NEAR_TOLERANCE = 0.12;
+const MAX_SAMPLE_GAP = 0.25;
+
+function makeRail(positions, start, end, from, to, songTime) {
+  const time = songTime(start);
+  const endTime = Math.max(songTime(end), time + MIN_RAIL_SECONDS);
+  const points = [{ t: time, value: from / MAX }];
+  for (const point of positions) {
+    if (point.t > start && point.t < end) points.push({ t: songTime(point.t), value: point.value / MAX });
+  }
+  if (end > start && endTime > songTime(end)) {
+    const scale = (endTime - time) / (songTime(end) - time);
+    for (const point of points) point.t = time + (point.t - time) * scale;
+  }
+  points.push({ t: endTime, value: to / MAX });
+  return { endTime, rail: points };
+}
+
+export function railPositionAt(note, time) {
+  const points = note.rail;
+  const index = indexAt(points, time);
+  const a = points[index], b = points[index + 1];
+  if (!b || time <= a.t) return a.value;
+  return a.value + (b.value - a.value) * (time - a.t) / (b.t - a.t);
+}
+
 export function buildMixChart(recording, manifest, selection = "mix1") {
   if (!recording?.events?.length || !(recording.durationMs > 0)) throw new Error("The mix recording is empty.");
   const { events } = recording;
@@ -78,7 +108,8 @@ export function buildMixChart(recording, manifest, selection = "mix1") {
     const [deck, control] = cue.control.split(".");
     return { channel: deck === "a" ? 1 : 2, row: ROW_BY_CONTROL[control], time: songTime(cue.t),
       dir: cue.to > cue.from ? "cw" : "ccw", degrees: Math.abs(cue.to - cue.from) / MAX * 180,
-      startPosition: cue.from / MAX, label: cue.label };
+      startPosition: cue.from / MAX, label: cue.label,
+      ...makeRail(recordedPositions(events, cue.control), cue.t, cue.endMs, cue.from, cue.to, songTime) };
   });
   for (const [control, row] of Object.entries(ROW_BY_CONTROL)) {
     for (const [side, channel] of [["a", 1], ["b", 2]]) {
@@ -92,21 +123,22 @@ export function buildMixChart(recording, manifest, selection = "mix1") {
         if (time < 0) return;
         const delta = peak.value - base.value;
         notes.push({ channel, row, time, dir: delta > 0 ? "cw" : "ccw",
-          degrees: Math.abs(delta) / MAX * 180, startPosition: base.value / MAX });
+          degrees: Math.abs(delta) / MAX * 180, startPosition: base.value / MAX,
+          ...makeRail(positions, first.t, peak.t, base.value, peak.value, songTime) });
       });
     }
   }
   notes.sort((a, b) => a.time - b.time);
   const fades = (aiCues ?? []).filter(cue => cue.control === "mixer.crossfade").map(cue => ({
-    start:songTime(cue.t), end:songTime(cue.endMs), to:cue.to/MAX,
+    start:songTime(cue.t), end:songTime(cue.endMs), from:cue.from/MAX, to:cue.to/MAX,
   }));
   if (selection === "mix1" && !aiCues) {
     const points = controlChanges(recordedPositions(events, "mixer.crossfade"));
     gestures(points, (first, base, peak) => {
-      fades.push({ start: songTime(first.t), end: songTime(peak.t), to: peak.value / MAX });
+      fades.push({ start: songTime(first.t), end: songTime(peak.t), from: base.value / MAX, to: peak.value / MAX });
     });
   }
-  return { notes, entry, aiCues, aiFades: aiCues ? fades : null, duration: songTime(recording.durationMs), valuesAt(time) {
+  return { notes, entry, aiCues, fades, duration: songTime(recording.durationMs), valuesAt(time) {
     return events[indexAt(events, (time - offset) * 1000)].values;
   }, crossfadeCueAt(time) {
     const fade = fades.find(move => move.end >= time);
@@ -126,73 +158,152 @@ export function buildMixChart(recording, manifest, selection = "mix1") {
   } };
 }
 
+const FADE_EARLY_SECONDS = 0.3;
+const FADE_LATE_SECONDS = 0.35;
+const FADE_HOLD_SECONDS = 0.18;
+const FADE_TARGET_TOLERANCE = 0.06;
+
 // Both drawing and MIDI judgments read the media playhead, including after a slow frame.
-export function createMixSource(chart, bpm, readTransport, onFrame) {
-  let screen, unsubscribe, notes, score, combo, aiFadeIndex;
+export function createMixSource(chart, bpm, readTransport, onFrame, {
+  getHype = () => ({}), onDeckResult = () => {},
+} = {}) {
+  let screen, unsubscribe, notes, scoring, fades, fadeIndex, nextNote, lastTime;
+  const knobPositions = new Map();
+  const active = [];
   function reset(fromTime = 0) {
-    notes = chart.notes.map((n, id) => ({ ...n, id, state: n.time < fromTime ? "skipped" : "pending" }));
-    score = combo = 0;
-    aiFadeIndex = chart.aiFades?.findIndex(fade => fade.end >= fromTime) ?? -1;
-    if (aiFadeIndex < 0) aiFadeIndex = chart.aiFades?.length ?? 0;
+    notes = chart.notes.map((n, id) => ({ ...n, id, state: n.endTime <= fromTime ? "skipped" : "pending",
+      movement: 0, engaged: false, nearTime: 0, tightTime: 0, totalTime: 0 }));
+    active.length = 0;
+    nextNote = 0;
+    lastTime = null;
+    fades = (chart.fades ?? []).filter(fade => fade.end >= fromTime && Math.abs(fade.to - fade.from) >= 0.12)
+      .map(fade => ({ ...fade, hadMovement: false, enteredAt: null }));
+    fadeIndex = 0;
+    scoring = createMixScoring(getHype, award => screen?.showScoreAward?.(award));
   }
   reset();
-  function award(points, multiplier) {
-    if (points <= 0) return;
-    score += points;
-    screen?.showScoreAward?.({ points, multiplier });
+
+  function bandAt(note, time, demo) {
+    if (demo) return "tight";
+    const key = note.channel + ":" + note.row;
+    const position = knobPositions.get(key);
+    if (!Number.isFinite(position) || !note.engaged) return "off";
+    const error = Math.abs(position - railPositionAt(note, time));
+    return error <= TIGHT_TOLERANCE ? "tight" : error <= NEAR_TOLERANCE ? "near" : "off";
   }
-  function applyJudgment(result) {
-    combo = result === "miss" ? 0 : combo + 1;
-    const multiplier = Math.min(4, 1 + Math.floor(combo / 10));
-    award((result === "perfect" ? 300 : result === "good" ? 100 : 0) * multiplier, multiplier);
-  }
-  function judge(note, time, result, reason) {
+
+  function finishRail(note, demo) {
+    const { totalTime, nearTime, tightTime } = note;
+    if (!totalTime) { note.state = "skipped"; return; }
+    const result = tightTime / totalTime >= 0.72 ? "perfect" : nearTime / totalTime >= 0.5 ? "good" : "miss";
     note.state = result === "miss" ? "miss" : "hit";
-    note.judgedAt = time;
-    applyJudgment(result);
-    screen.showJudgment({ channel: note.channel, row: note.row, judgment: result, reason });
+    note.judgedAt = note.endTime;
+    if (!demo) onDeckResult(result);
+    screen?.showJudgment({ channel: note.channel, row: note.row, judgment: result });
   }
+
+  function trackRails({ time, demo, playing, scoringEnabled }) {
+    const previous = lastTime;
+    lastTime = playing && scoringEnabled !== false ? time : null;
+    if (scoringEnabled === false) return [];
+    while (notes[nextNote] && notes[nextNote].time <= time) {
+      const note = notes[nextNote++];
+      if (note.state === "pending") {
+        note.state = "tracking";
+        active.push(note);
+      }
+    }
+    if (lastTime !== null && previous !== null && time > previous) {
+      const skipped = time - previous > MAX_SAMPLE_GAP;
+      const boundaries = [...new Set([previous, time, ...active.flatMap(note => [note.time, note.endTime])
+        .filter(t => t > previous && t < time)])].sort((a, b) => a - b);
+      for (let index = 1; index < boundaries.length; index++) {
+        const seconds = boundaries[index] - boundaries[index - 1];
+        const middle = boundaries[index] - seconds / 2;
+        const bands = active.filter(note => note.time <= middle && middle < note.endTime).map(note => {
+          const band = skipped ? "off" : bandAt(note, middle, demo);
+          note.totalTime += seconds;
+          if (band !== "off") note.nearTime += seconds;
+          if (band === "tight") note.tightTime += seconds;
+          return band;
+        });
+        scoring.sample(seconds, bands, demo);
+      }
+    }
+    for (let index = active.length - 1; index >= 0; index--) {
+      const note = active[index];
+      if (time < note.endTime) continue;
+      finishRail(note, demo);
+      active.splice(index, 1);
+    }
+    return active.map(note => ({
+      channel: note.channel, row: note.row,
+      target: railPositionAt(note, time), band: bandAt(note, time, demo),
+    }));
+  }
+
+  function trackCrossfade({ time, playerCrossfade, demo, scoringEnabled }) {
+    if (scoringEnabled === false) return;
+    while (fades[fadeIndex] && time > fades[fadeIndex].end + FADE_LATE_SECONDS + FADE_HOLD_SECONDS) fadeIndex++;
+    const fade = fades[fadeIndex];
+    if (!fade || time < fade.start - FADE_EARLY_SECONDS) return;
+    if (demo) {
+      if (time >= fade.end) {
+        fadeIndex++;
+        scoring.bonus(500, "Clean fade");
+      }
+      return;
+    }
+    if (!Number.isFinite(playerCrossfade)) return;
+    const distance = fade.to - playerCrossfade / MAX;
+    if (Math.abs(distance) > FADE_TARGET_TOLERANCE) {
+      fade.hadMovement ||= Math.sign(fade.to - fade.from) * distance > FADE_TARGET_TOLERANCE;
+      fade.enteredAt = null;
+      return;
+    }
+    if (!fade.hadMovement) return;
+    fade.enteredAt ??= time;
+    if (fade.enteredAt > fade.end + FADE_LATE_SECONDS ||
+      time < Math.max(fade.end, fade.enteredAt + FADE_HOLD_SECONDS)) return;
+    fadeIndex++;
+    const onTime = fade.enteredAt <= fade.end + 0.001;
+    scoring.bonus(onTime ? 500 : 250, onTime ? "Clean fade" : "Recovered fade");
+    onDeckResult("fade");
+  }
+
   return {
     reset,
-    addJogBonus(points) { award(points, 1); },
+    summary() { return scoring.stats(); },
+    addJogBonus(points) { scoring.bonus(points, "Deck B jog"); },
     attach(view) {
       screen = view;
       unsubscribe = view.onTurn(turn => {
-        const { time, playing, demo } = readTransport();
-        if (!playing || demo || !turn.dir) return;
-        const candidates = notes.filter(n => n.state === "pending" && n.channel === turn.channel &&
-          n.row === turn.row && Math.abs(n.time - time) <= 0.15);
-        const n = candidates.sort((a, b) => Math.abs(a.time - time) - Math.abs(b.time - time))[0];
-        if (!n) return;
-        const error = Math.abs(n.time - time);
-        if (n.dir !== turn.dir) judge(n, time, "miss", "wrong-way");
-        else judge(n, time, error <= 0.05 ? "perfect" : error <= 0.11 ? "good" : "miss");
+        if (!Number.isFinite(turn.position)) return;
+        const { time, playing, demo, scoringEnabled } = readTransport();
+        knobPositions.set(turn.channel + ":" + turn.row, turn.position);
+        if (!playing || demo || scoringEnabled === false || !Number.isFinite(turn.amount)) return;
+        for (const note of notes) {
+          if (note.time > time + 0.08) break;
+          if (note.channel === turn.channel && note.row === turn.row && time <= note.endTime &&
+            (note.state === "tracking" || note.state === "pending") && !note.engaged) {
+            note.movement += turn.amount;
+            const threshold = Math.min(0.035, Math.max(0.006, note.degrees / 180 * 0.15));
+            note.engaged = Math.abs(note.movement) >= threshold;
+          }
+        }
       });
     },
     frame() {
       const transport = readTransport();
       const { time, demo, playing } = transport;
-      if (playing) {
-        const fade = chart.aiFades?.[aiFadeIndex];
-        if (fade && time >= fade.end) {
-          const position = (transport.crossfade ?? 0) / MAX;
-          const error = Math.abs(position - fade.to);
-          if (demo || error <= 0.065) {
-            award(demo || error <= 0.025 ? 300 : 100, 1);
-            aiFadeIndex++;
-          } else if (time - fade.end > 0.2) aiFadeIndex++;
-        }
-        for (const n of notes) {
-          if (n.time > time) break;
-          if (n.state !== "pending") continue;
-          if (demo) judge(n, time, "perfect");
-          else if (time - n.time > 0.15) judge(n, time, "miss");
-        }
-      }
+      if (playing && transport.scoringEnabled !== false) trackCrossfade(transport);
+      const rails = trackRails(transport);
       onFrame(transport);
-      const visible = notes.filter(n => n.time <= time + APPROACH && (n.state === "pending" || time - n.judgedAt < 0.35));
-      return { time, bpm, approach: APPROACH, notes: visible, score, combo,
-        multiplier: Math.min(4, 1 + Math.floor(combo / 10)), mode: demo ? "demo" : "live",
+      const visible = notes.filter(n => n.time <= time + APPROACH &&
+        (n.state === "pending" || n.state === "tracking" || (n.state === "miss" && time - n.judgedAt < 0.35)));
+      const { score, combo, multiplier } = scoring.stats();
+      return { time, bpm, approach: APPROACH, notes: visible, rails, score, combo, multiplier,
+        hypeBonus: demo ? 0 : hypeBonus(getHype()), mode: demo ? "demo" : "live",
         audio: transport.audio, entryCue: transport.entryCue, jogCues: transport.jogCues, recordedMix: true, traces: chart.tracesAt(time),
         wheels: transport.wheels, crossfade: transport.crossfade, crossfadeCue: transport.crossfadeCue,
         guided: transport.guided, mixerGuide: transport.mixerGuide };

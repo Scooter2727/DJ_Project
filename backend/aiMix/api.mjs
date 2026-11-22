@@ -6,6 +6,7 @@ import { bestPair, buildInput, compileChart, responseSchema } from "./chart.mjs"
 
 const ROOT = "/api/custom-mix";
 const LIBRARY = new URL("./library/", import.meta.url);
+const TRACK_LABELS = new URL("./tracks.json", import.meta.url);
 const PROMPT = new URL("./systemPrompt.md", import.meta.url);
 const GENRES = ["edm", "pop", "rap"];
 
@@ -19,8 +20,14 @@ function json(res, status, value) {
 }
 async function catalog() {
   try {
-    const tracks = JSON.parse(await readFile(new URL("tracks.json",LIBRARY),"utf8"));
-    return tracks.filter(track => /^[a-z0-9-]+\.mp3$/.test(track.file) && track.sections?.length > 0);
+    const [library, labels] = await Promise.all([
+      readFile(new URL("tracks.json", LIBRARY), "utf8"),
+      readFile(TRACK_LABELS, "utf8"),
+    ]);
+    const titles = new Map(JSON.parse(labels).map(([id, , , title]) => [id, title]));
+    return JSON.parse(library)
+      .filter(track => /^[a-z0-9-]+\.mp3$/.test(track.file) && track.sections?.length > 0)
+      .map(track => ({ ...track, title: titles.get(track.id) ?? track.title }));
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
     return [];

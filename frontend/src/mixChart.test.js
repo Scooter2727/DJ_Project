@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
-import { buildMixChart } from "./mixChart.js";
+import { buildMixChart, createMixSource, railPositionAt } from "./mixChart.js";
 import { createMixSession } from "./mixSession.js";
 
 const asset = path => readFileSync(new URL("../public/" + path, import.meta.url), "utf8");
@@ -125,7 +125,7 @@ function setup(selection = "mix1", options = {}, customRecording) {
     async setPlaying(deck) { starts.push(deck); players[deck].paused = false; },
     stop() { for (const p of Object.values(players)) { p.pause(); p.currentTime = 0; } } };
   let turn;
-  const view = { knob() {}, onTurn(fn) { turn = fn; return () => {}; }, showJudgment(j) { judgments.push(j); } };
+  const view = { knob() {}, onTurn(fn) { turn = input => fn({ amount: 0.1, ...input }); return () => {}; }, showJudgment(j) { judgments.push(j); } };
   const data = buildMixChart(customRecording ?? recording,
     customRecording ? { ...manifest, cueOffsetMs: 0 } : manifest, selection);
   const session = createMixSession(data, selection, 126, {
@@ -135,6 +135,22 @@ function setup(selection = "mix1", options = {}, customRecording) {
   session.source.attach(view);
   session.attach(view);
   return { session, players, starts, states, mixes, judgments, frame: () => session.source.frame(50), turn, data };
+}
+
+function followRail(run, note) {
+  run.players.a.currentTime = note.time;
+  run.frame();
+  let position = note.startPosition;
+  const duration = note.endTime - note.time;
+  const steps = Math.ceil(duration * 60);
+  for (let step = 1; step <= steps; step++) {
+    const time = step === steps ? note.endTime : note.time + duration * step / steps;
+    const next = railPositionAt(note, time);
+    run.players.a.currentTime = time;
+    run.turn({ channel: note.channel, row: note.row, position: next, amount: next - position });
+    run.frame();
+    position = next;
+  }
 }
 
 test("the right platter countdown follows the calibrated Levels entry in play and preview", () => {
@@ -263,8 +279,8 @@ test("recording accepts an early right deck start and guided playback keeps the 
   assert.equal(frame.mixerGuide.target["a.volume"], 10000);
   assert.equal(practice.mixes.at(-1)["mixer.crossfade"], 12000);
   assert.ok(frame.notes.some(note => note.row === "LOW" && note.time === 3));
-  practice.turn({ channel: 1, row: "LOW", dir: "cw" });
-  assert.equal(practice.frame().score, 600);
+  followRail(practice, practice.data.notes.find(note => note.row === "LOW" && note.time === 3));
+  assert.ok(practice.frame().score > 300);
   practice.players.a.currentTime = 4;
   assert.equal(practice.frame().jogCues.find(cue => cue.deck === "b").at, 4);
   assert.equal(practice.players.b.currentTime, 1);
@@ -370,7 +386,7 @@ test("live cues follow the first deck media position through pauses and automati
   turn({ channel: 1, row: "LOW", dir: "ccw" });
   assert.equal(judgments.length, 0);
   session.input("a", true);
-  turn({ channel: 1, row: "LOW", dir: "ccw" });
+  followRail({ players, frame, turn }, chart.notes[0]);
   assert.equal(judgments[0].judgment, "perfect");
   for (const [time, secondsUntil] of [[20.034, null], [20.284, 3], [21.284, 2], [22.284, 1], [23.283, 0]]) {
     players.a.currentTime = time;
@@ -412,9 +428,9 @@ test("Deck B enters at the preview's −525 ms offset and an optional spin adds 
     const { players, session, frame, starts, data, turn } = setup("mix1", { getLevelsDelayMs: () => -525 }, oneDialCue);
     const entry = data.entry + 0.75 - 0.525;
     session.togglePlayback();
-    players.a.currentTime = 21;
-    turn({ channel: 1, row: "LOW", dir: "cw" });
-    assert.equal(frame().combo, 1);
+    followRail({ players, frame, turn }, data.notes[0]);
+    const beforeJog = frame();
+    assert.ok(beforeJog.score > 0);
     const spin = (offset) => {
       players.a.currentTime = entry + offset;
       session.input("b", true, "jog");
@@ -432,11 +448,11 @@ test("Deck B enters at the preview's −525 ms offset and an optional spin adds 
     players.a.currentTime = entry + 0.6;
     const resolved = frame();
     assert.equal(resolved.jogCues[0]?.bonus ?? 0, points);
-    assert.equal(resolved.score, 300 + points);
-    assert.equal(resolved.combo, 1);
+    assert.equal(resolved.score, beforeJog.score + points);
+    assert.equal(resolved.combo, beforeJog.combo);
     session.input("b", true, "jog");
     session.input("b", false, "midi");
-    assert.equal(frame().score, 300 + points);
+    assert.equal(frame().score, beforeJog.score + points);
     assert.deepEqual(starts, ["a", "b"]);
     assert.equal(players.b.paused, false);
   }
@@ -491,4 +507,96 @@ test("the on-screen playback control pauses and resumes both decks at their mix 
     assert.equal(players.b.currentTime, 1.25);
     assert.equal(session.demo, preview);
   }
+});
+
+test("knob rails pay over time and tight tracking builds combo while near tracking still scores", () => {
+  let hype = { level: 80 };
+  const transport = { time: 1, playing: true, demo: false };
+  const awards = [], judgments = [];
+  let turn;
+  const note = { time: 1, endTime: 9, channel: 1, row: "LOW", dir: "cw", degrees: 144,
+    rail: [{ t: 1, value: 0 }, { t: 9, value: 0.8 }] };
+  const source = createMixSource({ notes: [note], tracesAt: () => ({}) }, 126, () => transport, () => {}, {
+    getHype: () => hype,
+  });
+  source.attach({
+    onTurn(fn) { turn = fn; return () => {}; },
+    showJudgment(result) { judgments.push(result); },
+    showScoreAward(award) { awards.push(award); },
+  });
+  function move(position, amount) { turn({ channel: 1, row: "LOW", position, amount }); }
+  source.frame();
+  for (let i = 0; i < 10; i++) { move(0.003, 0.003); move(0, -0.003); }
+  transport.time = 1.04;
+  assert.equal(source.frame().score, 0);
+
+  move(0.04, 0.04);
+  for (let i = 1; i <= 200; i++) {
+    transport.time = 1.04 + i * 0.02;
+    move(railPositionAt(note, transport.time), 0.002);
+    source.frame();
+  }
+  const tracked = source.summary();
+  assert.equal(tracked.score, 1380);
+  assert.equal(tracked.combo, 10);
+  assert.equal(tracked.multiplier, 2);
+  assert.equal(awards[0].label, "Multiplier x2");
+  assert.equal(judgments.length, 0);
+
+  hype = { level: 100, celebration: { id: 1 } };
+  transport.time = 5.12;
+  move(railPositionAt(note, transport.time) + 0.08, 0.082);
+  const near = source.frame();
+  assert.ok(near.score > tracked.score);
+  assert.equal(near.combo, 10);
+  transport.time = 5.28;
+  move(railPositionAt(note, transport.time) + 0.08, 0.016);
+  assert.equal(source.frame().combo, 0);
+
+  transport.playing = false;
+  const pausedScore = source.frame().score;
+  move(0.9, 0.3);
+  assert.equal(source.frame().score, pausedScore);
+  transport.playing = true;
+  transport.time = 5.34;
+  assert.equal(source.frame().score, pausedScore);
+
+  transport.time = 9.1;
+  assert.equal(source.frame().score, pausedScore);
+  assert.equal(judgments.length, 1);
+  assert.equal(source.summary().bestCombo, 10);
+  source.addJogBonus(300);
+  assert.equal(source.summary().score, pausedScore + 300);
+  source.reset(9.1);
+  assert.equal(source.frame().score, 0);
+});
+
+test("clean and recovered fades use real input, hold their targets and award only once", () => {
+  const transport = { time: 0, playing: true, demo: false, crossfade: 16383 };
+  const source = createMixSource({
+    notes: [], tracesAt: () => ({}),
+    fades: [{ start: 2, end: 3, from: 0, to: 1 }, { start: 4, end: 5, from: 1, to: 0 }],
+  }, 126, () => transport, () => {});
+  const evaluate = (time, value) => {
+    transport.time = time;
+    transport.playerCrossfade = value;
+    return source.frame().score;
+  };
+  assert.equal(evaluate(2, 0), 0);
+  assert.equal(evaluate(2.7, 16383), 0);
+  assert.equal(evaluate(2.9, 0), 0);
+  assert.equal(evaluate(3.1, 16383), 0);
+  transport.playing = false;
+  assert.equal(evaluate(3.3, 16383), 0);
+  transport.playing = true;
+  assert.equal(evaluate(3.3, 16383), 250);
+  assert.equal(evaluate(3.4, 16383), 250);
+  assert.equal(evaluate(4, 16383), 250);
+  assert.equal(evaluate(4.7, 0), 250);
+  assert.equal(evaluate(5, 0), 750);
+  assert.equal(source.summary().bestCombo, 0);
+  assert.equal(source.summary().bonusPoints, 750);
+  source.reset(3.5);
+  assert.equal(evaluate(5, undefined), 0);
+  assert.equal(evaluate(5.6, 0), 0);
 });

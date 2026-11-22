@@ -60,17 +60,21 @@ test("a validated plan becomes exact knob and crossfade cues", () => {
   const { manifest, recording } = compileChart(plan,a,b,pair);
   const chart = buildMixChart(recording,manifest);
   assert.deepEqual(chart.notes.map(note=>[note.channel,note.row]),[[1,"LOW"],[2,"CFX"],[2,"CFX"]]);
-  const [firstFade] = chart.aiFades;
+  const [firstFade] = chart.fades;
   assert.equal(chart.crossfadeCueAt(firstFade.start).to,firstFade.to);
   assert.ok(Math.abs(chart.entry-pair.entry*60/126)<0.001);
   assert.ok(recording.events.every((event,i,list)=>!i||event.t>list[i-1].t));
-  let transport = {playing:true, crossfade:8192, time:firstFade.end, demo:false};
+  let transport = {playing:true, playerCrossfade:0, time:firstFade.start, demo:false};
   const source = createMixSource(chart,126,()=>transport,()=>{});
   source.attach({onTurn:()=>()=>{},showJudgment(){}});
-  assert.equal(source.frame().score,300);
-  assert.equal(source.frame().score,300);
-  transport = {...transport,time:chart.aiFades[1].end+0.3};
-  assert.equal(source.frame().score,300);
+  assert.equal(source.frame().score,0);
+  transport = {...transport,time:firstFade.end-0.2,playerCrossfade:8192};
+  assert.equal(source.frame().score,0);
+  transport.time = firstFade.end;
+  assert.equal(source.frame().score,500);
+  assert.equal(source.frame().score,500);
+  transport.time = chart.fades[1].end+0.6;
+  assert.equal(source.frame().score,500);
 });
 
 test("long, well-matched sections get a much larger transition window than before", () => {
