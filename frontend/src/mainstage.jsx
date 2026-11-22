@@ -552,6 +552,10 @@ function MainstageApp() {
   const mixActive = transport === "live" || transport === "demo" || transport === "armed";
   const canRecord = mode === "game" && selectedTrack.id === "mix1" && !!mix;
 
+  const midiStatus = message || (access && !port ? "No MIDI input found. Check the USB data cable."
+    : access && !connected ? "Opening MIDI input…"
+    : connected && !receivingMidi ? "Move a knob to start." : "");
+
   return <main className="mainstage-shell">
     <audio ref={musicRef} src="/audio/background-music.mp3" loop preload="auto" muted={musicMuted} aria-hidden="true" />
     {mode === "ai" && <CustomMixPicker onClose={() => setMode("select")} onReady={openAiMix} lastMix={aiMix} />}
@@ -629,16 +633,28 @@ function MainstageApp() {
       {mode === "game" && <button className="mainstage-button" disabled={!gameMix} onClick={() => sessionRef.current?.togglePlayback()}>
         {transport === "armed" ? (isRecording ? "Play Deck A" : "Start practice") : previewPlaying ? "Pause track" : isAi ? "Play challenge" : "Play track"}
       </button>}
-      <button className="mainstage-button" disabled={!mix || connecting} onClick={access ? disconnect : connect}>{connecting ? "Requesting MIDI…" : access ? "Disconnect DDJ" : "Connect DDJ-FLX4"}</button>
+      {mode !== "title" && <button className="mainstage-button" disabled={!mix || connecting} onClick={access ? disconnect : connect}>{connecting ? "Requesting MIDI…" : access ? "Disconnect DDJ" : "Connect DDJ-FLX4"}</button>}
       {mode === "game" && <button className="mainstage-button" onClick={toggleCamera}>{cameraFailed ? "Retry camera" : cameraOn ? "Hide camera" : "Use camera"}</button>}
       {ports.length > 1 && <select className="mainstage-select" value={selectedPort} onChange={event => setSelectedPort(event.target.value)} aria-label="MIDI input">
         {ports.map(input => <option key={input.id} value={input.id}>{input.name || "MIDI input"}</option>)}
       </select>}
-      <span className={connected ? "mainstage-status online" : "mainstage-status"}>{message || (access && !port ? "No MIDI input found. Check the USB data cable." : access && !connected ? "Opening MIDI input…" : connected && !receivingMidi ? "MIDI input open. Move a knob to test." : null) || (cameraOn && camera.status === "error" && camera.message) || (mode === "game" && transport === "finished" ? "Mix complete" :
+      <span className={connected ? "mainstage-status online" : "mainstage-status"}>{(mode !== "title" && midiStatus) || (cameraOn && camera.status === "error" && camera.message) || (mode === "game" && transport === "finished" ? "Mix complete" :
         mode === "game" && transport === "ready" && connected ? (selectedTrack.id === "levels" ? "Spin right clockwise to start Levels" : isAi ? "Spin left counterclockwise to start the mix" : "Spin left counterclockwise to start Heroes") :
         isAi && gameMix ? gameMix.manifest.name : connected ? "DDJ connected" : selectedTrack.name)}</span>
     </div>}
-    <div className="mainstage-stage" ref={mountRef} />
+    <div className="mainstage-stage">
+      <div className="mainstage-stage-mount" ref={mountRef} />
+      {mode === "title" && !transitionPreview && <div className="mainstage-title-overlay">
+        <div className="mainstage-title-connect">
+          <button className="mainstage-button" disabled={connecting || Boolean(access && port && !connected)}
+            aria-label={connected ? "Disconnect DDJ-FLX4" : "Connect DDJ-FLX4"}
+            onClick={connected ? disconnect : connect}>
+            {connected ? "Connected" : connecting || (access && port) ? "Connecting…" : "Connect"}
+          </button>
+          <div className="mainstage-title-midi-status" role="status">{midiStatus}</div>
+        </div>
+      </div>}
+    </div>
     {mode === "game" && isAi && aiCue?.label && <div className="ai-cue" role="status">{aiCue.label}</div>}
     {mode === "game" && isAi && gameMix && <details className="ai-mixer">
       <summary className="mainstage-button">On-screen knobs</summary>

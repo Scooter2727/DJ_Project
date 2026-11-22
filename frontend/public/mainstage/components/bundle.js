@@ -1405,7 +1405,7 @@
       // text (just smaller and stacked underneath), by recursing into this same function.
       var below = dy + (pad + fs + depth) * sc + size * 0.16;
       if (sub) {
-        var subSize = Math.max(18, Math.round(size * 0.42));
+        var subSize = o.subSize || Math.max(18, Math.round(size * 0.42));
         below = Title.draw(ctx, cx, below + subSize * 0.62, { text: sub, size: subSize, px: o.subPx || px, maxWidth: o.maxWidth, beat: beat, t: t, sub: '' }).below;
       }
       if (o.eq) {
@@ -1464,7 +1464,7 @@
       stage.run(function (dt, tAbs) {
         clock += dt;
         var beat = bd.draw(stage, dt, tAbs, opts.bpm, 0.5, 0, opts.getAudioBands), s = stage.sharp;
-        Title.draw(s, 800, 300, { text: 'MAINSTAGE', sub: 'MIAMI', size: 110, px: 5, maxWidth: 1240, beat: beat, t: clock });
+        Title.draw(s, 800, 300, { text: 'MAINSTAGE', sub: 'MIAMI', size: 110, subSize: 108, px: 5, maxWidth: 1240, beat: beat, t: clock });
         s.save(); s.font = '16px ' + FONT; s.textAlign = 'center';
         s.fillStyle = Math.floor(clock * 1.5) % 2 ? C.cream : hexA(C.cream, 0.35);
         s.fillText('TURN ANY KNOB TO START', 800, 800);
