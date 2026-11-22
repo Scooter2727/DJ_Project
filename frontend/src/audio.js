@@ -7,6 +7,40 @@ function smooth(parameter, value, context) {
   parameter.setTargetAtTime(value, context.currentTime, 0.018);
 }
 
+// Shared 16-band energy split (45Hz and up, two bands per octave) used by both the deck
+// equalizer (fed from MixAudioEngine.audioFrame below) and any other analyser that wants
+// the same {bands, kick, bass, hats, energy} shape the bundled game renderer expects.
+function bandsFromSpectrum(spectrum, sampleRate, fftSize) {
+  const hzPerBin = sampleRate / fftSize;
+  const bands = Array.from({ length: 16 }, (_, i) => {
+    const start = Math.floor(45 * 2 ** (i / 2) / hzPerBin);
+    const end = Math.min(spectrum.length, Math.max(start + 1, Math.floor(45 * 2 ** ((i + 1) / 2) / hzPerBin)));
+    let total = 0;
+    for (let bin = start; bin < end; bin++) total += spectrum[bin];
+    return total / (255 * Math.max(1, end - start));
+  });
+  return { bands, kick: bands[1], bass: bands[4], hats: bands[14], energy: bands.reduce((a, b) => a + b) / bands.length };
+}
+
+// A minimal analyser for a plain <audio> element that isn't part of the deck mix -- e.g. a
+// background music track. Routes through an AnalyserNode so the bundled renderer can draw real
+// audio-reactive visuals, without touching MixAudioEngine's deck gain/filter chain at all.
+export function createAudioAnalyser(audioElement) {
+  const context = new AudioContext();
+  const analyser = context.createAnalyser();
+  analyser.fftSize = 1024;
+  const spectrum = new Uint8Array(analyser.frequencyBinCount);
+  const source = context.createMediaElementSource(audioElement);
+  source.connect(analyser).connect(context.destination);
+  return {
+    resume: () => context.resume(),
+    frame: () => {
+      analyser.getByteFrequencyData(spectrum);
+      return bandsFromSpectrum(spectrum, context.sampleRate, analyser.fftSize);
+    },
+  };
+}
+
 export class MixAudioEngine {
   constructor({ deckA, deckB }) {
     this.context = new AudioContext();
@@ -146,14 +180,6 @@ export class MixAudioEngine {
 
   audioFrame() {
     this.analyser.getByteFrequencyData(this.spectrum);
-    const hzPerBin = this.context.sampleRate / this.analyser.fftSize;
-    const bands = Array.from({ length: 16 }, (_, i) => {
-      const start = Math.floor(45 * 2 ** (i / 2) / hzPerBin);
-      const end = Math.min(this.spectrum.length, Math.max(start + 1, Math.floor(45 * 2 ** ((i + 1) / 2) / hzPerBin)));
-      let total = 0;
-      for (let bin = start; bin < end; bin++) total += this.spectrum[bin];
-      return total / (255 * Math.max(1, end - start));
-    });
-    return { bands, kick: bands[1], bass: bands[4], hats: bands[14], energy: bands.reduce((a, b) => a + b) / bands.length };
+    return bandsFromSpectrum(this.spectrum, this.context.sampleRate, this.analyser.fftSize);
   }
 }
