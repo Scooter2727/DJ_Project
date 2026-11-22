@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { decodeMidi } from "./midi.js";
-import { MixAudioEngine } from "./audio.js";
+import { MixAudioEngine, createAudioAnalyser } from "./audio.js";
 import CustomMixPicker from "./CustomMixPicker.jsx";
 import { buildMixChart, ROW_BY_CONTROL } from "./mixChart.js";
 import { createMixSession } from "./mixSession.js";
@@ -13,6 +13,9 @@ import "./mainstage.css";
 
 const ROWS = Object.values(ROW_BY_CONTROL);
 const SAVED_MIXES_KEY = "mainstage-saved-mixes";
+const MUSIC_MUTED_KEY = "mainstage-music-muted";
+const MUSIC_VOLUME = 0.4;
+const MUSIC_VOLUME_IN_GAME = 0.16;
 const GUIDE_FORMAT = "mainstage-mix1";
 const DEFAULT_LEVELS_OFFSET_MS = -525;
 const MAINSTAGE_BPM = 126;
@@ -50,6 +53,8 @@ function MainstageApp() {
   const hypeMeterRef = useRef(null);
   const audioRef = useRef(null);
   const audioFilesRef = useRef(null);
+  const musicRef = useRef(null);
+  const musicAnalyserRef = useRef(null);
   const playbackButtonState = useRef(false);
   const valuesRef = useRef({});
   const modeRef = useRef("title");
@@ -85,12 +90,45 @@ function MainstageApp() {
   const [aiMix, setAiMix] = useState(null);
   const [aiControls, setAiControls] = useState({});
   const [aiCue, setAiCue] = useState(null);
+  const [musicMuted, setMusicMuted] = useState(() => localStorage.getItem(MUSIC_MUTED_KEY) === "1");
   const isAi = selectedTrack.id === "ai";
   const gameMix = mode === "game" ? (isAi ? aiMix : mix) : null;
 
   useEffect(() => {
     if (draftMix) saveDialogRef.current?.showModal();
   }, [draftMix]);
+
+  // Background music lives on its own <audio> element outside the mountRef
+  // screens so it survives every mode switch instead of restarting. Browsers
+  // block autoplay until a real user gesture, so this only primes playback --
+  // unlockMusic() (fired from the Start button and the DDJ connect button,
+  // the two earliest gesture points in the app) is what actually starts it.
+  useEffect(() => {
+    if (musicRef.current) musicRef.current.muted = musicMuted;
+    try {
+      localStorage.setItem(MUSIC_MUTED_KEY, musicMuted ? "1" : "0");
+    } catch {}
+  }, [musicMuted]);
+
+  useEffect(() => {
+    if (musicRef.current) musicRef.current.volume = mode === "game" ? MUSIC_VOLUME_IN_GAME : MUSIC_VOLUME;
+  }, [mode]);
+
+  function unlockMusic() {
+    const music = musicRef.current;
+    if (!music) return;
+    music.volume = modeRef.current === "game" ? MUSIC_VOLUME_IN_GAME : MUSIC_VOLUME;
+    // Build the analyser lazily, on the same user gesture that unlocks playback -- an
+    // AudioContext can't be created/resumed without one, and createMediaElementSource can
+    // only be called once per element, so this must happen exactly once.
+    if (!musicAnalyserRef.current) musicAnalyserRef.current = createAudioAnalyser(music);
+    void musicAnalyserRef.current.resume().catch(() => {});
+    void music.play().catch(() => {});
+  }
+
+  // Real frequency data for the title/track-select venue's audio-reactive EQ bars. Falls back to
+  // null (the bundled renderer's own synthetic animation) until a user gesture has unlocked music.
+  const getMusicBands = useCallback(() => musicAnalyserRef.current?.frame().bands ?? null, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -164,7 +202,7 @@ function MainstageApp() {
       menuBackdropRef.current = new api.TitleBackdrop();
       const title = api.TitleScreen.create(mountRef.current, {
         backdrop: menuBackdropRef.current, bpm: MAINSTAGE_BPM, preview: transitionPreview,
-        fadeIn: !returning && fullMotion,
+        fadeIn: !returning && fullMotion, getAudioBands: getMusicBands,
         keyboard: !transitionPreview, onStart: () => setMode("select"),
       });
       pageRef.current = title;
@@ -179,6 +217,7 @@ function MainstageApp() {
         tracks: TRACKS,
         index: returning ? TRACKS.indexOf(selectedTrack) : transitionPreview ? 1 : 0,
         backdrop: menuBackdropRef.current, preview: transitionPreview, keyboard: !transitionPreview,
+        getAudioBands: getMusicBands,
         intro: fullMotion && !returning,
         confirmDelay: fullMotion ? 0.5 : 0,
         onConfirm: (track, index, recordPose) => {
@@ -278,7 +317,7 @@ function MainstageApp() {
       session.destroy();
       screen.destroy();
     };
-  }, [mode, selectedTrack, gameMix, isAi, previewDeck, readPlayback, loadedMix, fullMotion]);
+  }, [mode, selectedTrack, gameMix, isAi, previewDeck, readPlayback, loadedMix, fullMotion, getMusicBands]);
 
   useEffect(() => {
     if (mode === "loading" && mix) pageRef.current?.setProgress(1);
@@ -391,6 +430,7 @@ function MainstageApp() {
       if (!navigator.requestMIDIAccess) throw new Error("Use desktop Chrome or Edge on localhost for Web MIDI.");
       // Start audio unlock from the click, but let MIDI connect independently.
       void Promise.resolve().then(() => getAudio().resume()).catch(() => {});
+      unlockMusic();
       const nextAccess = await navigator.requestMIDIAccess();
       setAccess(nextAccess);
     } catch (error) {
@@ -513,6 +553,7 @@ function MainstageApp() {
   const canRecord = mode === "game" && selectedTrack.id === "mix1" && !!mix;
 
   return <main className="mainstage-shell">
+    <audio ref={musicRef} src="/audio/background-music.mp3" loop preload="auto" muted={musicMuted} aria-hidden="true" />
     {mode === "ai" && <CustomMixPicker onClose={() => setMode("select")} onReady={openAiMix} lastMix={aiMix} />}
     <video className="mainstage-camera-source" ref={cameraVideoRef} muted playsInline aria-hidden="true" />
     {mode === "game" && <div className="mainstage-hype-accessible" ref={hypeMeterRef} role="meter" aria-label="Crowd hype" aria-valuemin={0} aria-valuemax={100} aria-valuenow={STARTING_HYPE} />}
@@ -572,9 +613,10 @@ function MainstageApp() {
       </div>
     </details>}
 
-      <button className="mainstage-button" disabled={isRecording} onClick={mode === "title" ? () => setMode("select") : () => returnToMenu("title")}>
+      <button className="mainstage-button" disabled={isRecording} onClick={mode === "title" ? () => { unlockMusic(); setMode("select"); } : () => returnToMenu("title")}>
         {mode === "title" ? "Start" : "Main menu"}
       </button>
+      <button className="mainstage-button" onClick={() => setMusicMuted(current => !current)}>{musicMuted ? "Unmute music" : "Mute music"}</button>
       <a className="mainstage-button mainstage-preview-link" href="?preview=transitions" target="_blank" rel="noopener">Watch transitions</a>
       {!fullMotion && mode === "title" && <button className="mainstage-button" onClick={() => setFullMotion(true)}>Enable full motion</button>}
       {mode === "game" && <button className="mainstage-button" disabled={isRecording} onClick={() => returnToMenu("select")}>Tracks</button>}
