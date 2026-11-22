@@ -941,7 +941,7 @@
     ctx.strokeStyle = hexA(C.violet, 0.8); ctx.lineWidth = 2;
     poly(ctx, [[x + c + 4, y + 5], [x + w - c - 4, y + 5], [x + w - 5, y + c + 4], [x + w - 5, y + h - c - 4], [x + w - c - 4, y + h - 5], [x + c + 4, y + h - 5], [x + 5, y + h - c - 4], [x + 5, y + c + 4]]); ctx.stroke();
   }
-  // left column: score, then combo (with multiplier and hype) underneath. top right: webcam slot.
+  // Top left: score. Top right: webcam slot.
   var CAM = { x: W - 342, y: 20, w: 320, h: 180 };   // 16:9 inner frame for the player's live webcam
   var HYPE_BAR = { x: CAM.x - 76, y: CAM.y + 27, w: 52, h: CAM.h - 51 };
 
@@ -1045,35 +1045,26 @@
 
   var HUD = {
     cam: CAM,
-    // s: {score, combo, multiplier, energy, mode, beat, hasCrowdHype}
     draw: function (ctx, s) {
       ctx.save(); ctx.textBaseline = 'alphabetic';
       plate(ctx, 22, 20, 330, 92);
       ctx.font = '12px ' + FONT; ctx.fillStyle = C.creamDim; ctx.textAlign = 'left'; ctx.fillText('SCORE', 44, 50);
       ctx.font = '30px ' + FONT; ctx.fillStyle = C.cream; ctx.fillText(pad(s.score, 7), 44, 93);
-      plate(ctx, 22, 122, 330, s.hasCrowdHype ? 86 : 112);
-      ctx.font = '12px ' + FONT; ctx.fillStyle = C.creamDim; ctx.fillText('COMBO', 44, 152);
-      ctx.textAlign = 'right'; ctx.fillStyle = C.amber; ctx.fillText('MULTI x' + (s.multiplier || 1), 330, 152);
-      ctx.textAlign = 'left'; ctx.font = '30px ' + FONT; ctx.fillStyle = C.cream; ctx.fillText(String(s.combo || 0), 44, 193);
-      var e = clamp(s.energy || 0, 0, 1), k, segs = 16;
-      if (!s.hasCrowdHype) {
-        ctx.font = '8px ' + FONT; ctx.fillStyle = C.creamDim; ctx.fillText('HYPE', 44, 219);
-        for (k = 0; k < segs; k++) {
-          var on = k < Math.round(e * segs), col = k > 12 ? C.magenta : k > 7 ? C.violet : C.cyan;
-          ctx.fillStyle = on ? col : 'rgba(246,236,214,.12)'; ctx.fillRect(90 + k * 14.5, 209, 11, 11);
-        }
+      if (s.award) {
+        var age = s.clock - s.award.at;
+        var y = 50 - (s.reducedMotion ? 0 : age * 6);
+        ctx.save();
+        ctx.globalAlpha = clamp((1 - age) / 0.3, 0, 1);
+        ctx.textAlign = 'right'; ctx.lineWidth = 4; ctx.strokeStyle = C.void;
+        ctx.font = '13px ' + FONT; ctx.fillStyle = C.amber;
+        var multiplierLabel = 'x' + s.award.multiplier;
+        var pointsX = 330 - ctx.measureText(multiplierLabel).width - 12;
+        ctx.strokeText(multiplierLabel, 330, y); ctx.fillText(multiplierLabel, 330, y);
+        ctx.font = '16px ' + FONT; ctx.fillStyle = C.laser;
+        var label = '+' + s.award.points;
+        ctx.strokeText(label, pointsX, y); ctx.fillText(label, pointsX, y);
+        ctx.restore();
       }
-      // Stack the EQ below the score and combo so falling notes have a clear entrance.
-      ctx.translate(37 - (W / 2 - 150), 244 - 16);
-      var bp = (s.beat || 0) - Math.floor(s.beat || 0);
-      plate(ctx, W / 2 - 150, 16, 300, 90);
-      for (k = 0; k < 18; k++) {
-        var hgt = 6 + Math.abs(Math.sin(k * 1.7 + Math.floor(s.beat || 0) * 0.9)) * (8 + 18 * e) * (0.55 + 0.45 * (1 - bp));
-        ctx.fillStyle = k % 3 === 0 ? C.magenta : k % 3 === 1 ? C.violet : C.cyan;
-        for (var y = 0; y < hgt; y += 5) ctx.fillRect(W / 2 - 128 + k * 14.4, 60 - y, 10, 3);
-      }
-      ctx.font = '9px ' + FONT; ctx.textAlign = 'center'; ctx.fillStyle = s.mode === 'live' ? C.cyan : C.amber;
-      ctx.fillText(s.guided ? 'GUIDED PRACTICE' : s.mode === 'live' ? 'LIVE CONTROLLER' : s.mode === 'keys' ? 'KEYBOARD PLAY' : s.recordedMix ? 'MIX PREVIEW' : 'SAMPLE DATA  AUTOPLAY', W / 2, 92);
       ctx.restore();
     },
     // video: an HTMLVideoElement (or null for the empty slot).
@@ -1407,6 +1398,10 @@
     var knobs = {}, turnListeners = [];
     var smoothing = opts.knobSmoothing == null ? 0.035 : opts.knobSmoothing; // seconds; subtle
     var clock = 0, energy = 0, lastCombo = 0, frameState = null;
+    var scoreAward = null;
+    function showScoreAward(award) {
+      scoreAward = { points: award.points, multiplier: award.multiplier, at: clock };
+    }
     ROWS.forEach(function (r) { [1, 2].forEach(function (ch) { knobs[key(ch, r)] = { pos: 0.5, target: 0.5, angle: 0 }; }); });
 
     function knob(ev) {
@@ -1462,7 +1457,7 @@
       });
 
       // retro layer
-      var vo = { t: tAbs, e: energy, beat: beat, fxOn: energy > 0.6, eq: eq, wheels: f.wheels, crossfade: f.crossfade };
+      var vo = { t: tAbs, e: energy, beat: hype?.beat ?? beat, fxOn: energy > 0.6, eq: eq, wheels: f.wheels, crossfade: f.crossfade };
       stage.beginLow();
       if (show.venue) Venue.draw(stage.low, vo); else { stage.low.fillStyle = C.void; stage.low.fillRect(0, 0, W, H); }
       if (show.hud && confetti) drawHypeConfetti(stage.low, confetti.pieces, celebration, false);
@@ -1504,7 +1499,8 @@
         drawJogCue(cue.deck === 'a' ? 1 : 2, label, color);
       });
       fx.draw(s);
-      if (show.hud) HUD.draw(s, { score: f.score, combo: f.combo, multiplier: f.multiplier, energy: energy, mode: f.mode, beat: beat, recordedMix: f.recordedMix, guided: f.guided, hasCrowdHype: Boolean(hype) });
+      if (scoreAward && clock - scoreAward.at >= 1) scoreAward = null;
+      if (show.hud) HUD.draw(s, { score: f.score, award: scoreAward, clock: clock, reducedMotion: reducedMotion });
       if (show.hud && f.mixerGuide) drawRecordedFaders(s, f.mixerGuide);
       if (show.hud && show.webcam !== false) HUD.drawWebcam(s, webcam, {
         mirror: webcamMirror, t: tAbs, effects: opts.drawWebcamEffects, hype: hype, dt: dt, reducedMotion: reducedMotion
@@ -1520,6 +1516,7 @@
       el: stage.el,
       knob: knob,
       showJudgment: showJudgment,
+      showScoreAward: showScoreAward,
       setWebcam: setWebcam,   // MediaStream (e.g. from getUserMedia), an HTMLVideoElement, or null
       onTurn: function (fn) { turnListeners.push(fn); return function () { turnListeners = turnListeners.filter(function (g) { return g !== fn; }); }; },
       setSource: function (src) { source = src; },
@@ -1578,7 +1575,13 @@
     function judge(n, j, reason) {
       n.state = j === 'miss' ? 'miss' : 'hit'; n.judgedAt = time;
       st.counts[j]++;
-      if (j === 'miss') st.combo = 0; else { st.combo++; st.score += (j === 'perfect' ? 300 : 100) * mult(); }
+      if (j === 'miss') st.combo = 0;
+      else {
+        st.combo++;
+        var multiplier = mult(), points = (j === 'perfect' ? 300 : 100) * multiplier;
+        st.score += points;
+        if (screen && screen.showScoreAward) screen.showScoreAward({ points: points, multiplier: multiplier });
+      }
       st.maxCombo = Math.max(st.maxCombo, st.combo);
       if (screen) screen.showJudgment({ channel: n.channel, row: n.row, judgment: j, reason: reason });
       emit('judge', { note: n, judgment: j, reason: reason, combo: st.combo, score: st.score });

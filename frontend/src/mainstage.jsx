@@ -14,6 +14,7 @@ const ROWS = Object.values(ROW_BY_CONTROL);
 const SAVED_MIXES_KEY = "mainstage-saved-mixes";
 const GUIDE_FORMAT = "mainstage-mix1";
 const DEFAULT_LEVELS_OFFSET_MS = -525;
+const MAINSTAGE_BPM = 126;
 
 function readSavedMixes() {
   try {
@@ -29,9 +30,9 @@ async function loadJson(url, signal) {
   return response.json();
 }
 const TRACKS = [
-  { id: "mix1", name: "HEROES / LEVELS", color: "#34e0ff", icon: "bolt", bpm: 126 },
-  { id: "heroes", name: "HEROES", color: "#ffb330", icon: "mic", bpm: 126 },
-  { id: "levels", name: "LEVELS", color: "#ff3d9a", icon: "star", bpm: 126 },
+  { id: "mix1", name: "HEROES / LEVELS", color: "#34e0ff", icon: "bolt", bpm: MAINSTAGE_BPM },
+  { id: "heroes", name: "HEROES", color: "#ffb330", icon: "mic", bpm: MAINSTAGE_BPM },
+  { id: "levels", name: "LEVELS", color: "#ff3d9a", icon: "star", bpm: MAINSTAGE_BPM },
 ];
 
 function MainstageApp() {
@@ -101,7 +102,7 @@ function MainstageApp() {
     const playback = audioRef.current?.playbackPosition();
     if (!playback) return null;
     const deck = playback.deck === "a" ? gameMix?.manifest.deckA : gameMix?.manifest.deckB;
-    return { ...playback, tempo: deck?.tempo, beatOffsetMs: (deck?.beatOffsetSeconds ?? 0) * 1000 };
+    return { ...playback, tempo: MAINSTAGE_BPM, beatOffsetMs: (deck?.beatOffsetSeconds ?? 0) * 1000 };
   }, [gameMix]);
 
   const onPoseFrame = useCallback(frame => {
@@ -148,7 +149,7 @@ function MainstageApp() {
       window.addEventListener("keydown", onKey, { once: true });
       stage.run((dt, absolute) => {
         clock += dt;
-        const beat = backdrop.draw(stage, dt, absolute, 126, 0.5);
+        const beat = backdrop.draw(stage, dt, absolute, MAINSTAGE_BPM, 0.5);
         api.Title.draw(stage.sharp, 800, 300, {
           text: "MAINSTAGE",
           sub: "",

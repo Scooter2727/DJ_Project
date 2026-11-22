@@ -114,9 +114,15 @@ export function createMixSource(chart, bpm, readTransport, onFrame) {
     score = combo = 0;
   }
   reset();
+  function award(points, multiplier) {
+    if (points <= 0) return;
+    score += points;
+    screen?.showScoreAward?.({ points, multiplier });
+  }
   function applyJudgment(result) {
     combo = result === "miss" ? 0 : combo + 1;
-    score += (result === "perfect" ? 300 : result === "good" ? 100 : 0) * Math.min(4, 1 + Math.floor(combo / 10));
+    const multiplier = Math.min(4, 1 + Math.floor(combo / 10));
+    award((result === "perfect" ? 300 : result === "good" ? 100 : 0) * multiplier, multiplier);
   }
   function judge(note, time, result, reason) {
     note.state = result === "miss" ? "miss" : "hit";
@@ -126,7 +132,7 @@ export function createMixSource(chart, bpm, readTransport, onFrame) {
   }
   return {
     reset,
-    addJogBonus(points) { score += points; },
+    addJogBonus(points) { award(points, 1); },
     attach(view) {
       screen = view;
       unsubscribe = view.onTurn(turn => {

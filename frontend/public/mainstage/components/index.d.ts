@@ -44,6 +44,7 @@ export interface Screen {
   el: HTMLElement;
   knob(ev: KnobEvent): Turn | null;
   showJudgment(ev: { channel: Channel; row: Row; judgment: Judgment; reason?: 'wrong-way' }): void;
+  showScoreAward?(award: { points: number; multiplier: number }): void;
   onTurn(fn: (t: Turn) => void): () => void;
   setSource(src: GameSource): void;
   setRows(rows: Row[]): void;
