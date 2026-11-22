@@ -15,9 +15,14 @@ const PRESET_FADERS = ["mixer.crossfade", "a.volume", "b.volume"];
 export function createMixSession(chart, selection, bpm, {
   getAudio, liveValues, onState, onError, getLevelsDelayMs = () => 0,
   recordedLevels = null, recordedPlayButtons = [], onRecording = () => {},
+  aiDecks = null, onMixer = () => {}, onAiCue = () => {},
 }) {
   const master = selection === "levels" ? "b" : "a";
-  let rightCueTime = chart.entry + LEVELS_START_DELAY_SECONDS;
+  const startA = aiDecks?.deckA.startSeconds ?? 0;
+  const startB = aiDecks?.deckB.startSeconds ?? 0;
+  const rateB = aiDecks?.deckB.playbackRate ?? 1;
+  let rightCueTime = chart.entry + (aiDecks ? 0 : LEVELS_START_DELAY_SECONDS);
+  const deckBPosition = time => startB + (time - rightCueTime) * rateB;
   const initialValues = chart.valuesAt(0);
   let audio, screen, mode = "ready", lastValues;
   let liveMixerValues, presetFaders;
@@ -35,9 +40,10 @@ export function createMixSession(chart, selection, bpm, {
   let acknowledgedLeft = null;
   const rightBonuses = new Map();
   const pending = new Map();
+  let visibleAiCue = null;
 
   function mixTime() {
-    return tailOffset === null ? audio.players[master].currentTime : tailOffset + audio.players.b.currentTime;
+    return tailOffset === null ? Math.max(0, audio.players[master].currentTime - startA) : tailOffset + audio.players.b.currentTime;
   }
 
   function captureMixer(values) {
@@ -131,7 +137,7 @@ export function createMixSession(chart, selection, bpm, {
     const playing = active && !!player && !player.paused && !player.ended && !player.seeking && player.readyState >= 2;
     return { time, playing,
       demo: mode === "demo", guided: guided || armedFor === "practice", entryCue, wheels,
-      crossfade: mode === "demo" ? referenceFader : liveValues()["mixer.crossfade"]
+      crossfade: mode === "demo" ? referenceFader : (aiDecks ? liveMixerValues?.["mixer.crossfade"] : liveValues()["mixer.crossfade"])
         ?? (capture ? crossfade : active ? referenceFader : initialValues["mixer.crossfade"]),
       crossfadeCue: active && showMixCues ? chart.crossfadeCueAt(time) : null,
       jogCues: waitingForSpin ? [{ deck: master, at: 0, remaining: 0, lead: JOG_LEAD_SECONDS, matched: false, bonus: 0 }]
@@ -149,6 +155,7 @@ export function createMixSession(chart, selection, bpm, {
     levelsEventIndex = 0;
     replayLevelsEntry = undefined;
     pending.clear();
+    if (visibleAiCue) { visibleAiCue = null; onAiCue(null); }
     audio?.stop();
     resumeSecond = false;
     lastValues = undefined;
@@ -165,7 +172,7 @@ export function createMixSession(chart, selection, bpm, {
       if (pending.get(deck) === token && deck === "b" && !audio.players.b.paused) {
         captureRightTransport(audio.players.b.currentTime);
         if (usesPresetEntry() && !audio.players.a.paused) {
-          alignDeckB(audio.players.a.currentTime - rightCueTime);
+          alignDeckB(deckBPosition(mixTime()));
         }
       }
     }).catch(error => {
@@ -185,7 +192,7 @@ export function createMixSession(chart, selection, bpm, {
   }
 
   function canCalibrate() {
-    return !recordedLevels && usesPresetEntry();
+    return !aiDecks && !recordedLevels && usesPresetEntry();
   }
 
   function usesPresetEntry() {
@@ -219,7 +226,7 @@ export function createMixSession(chart, selection, bpm, {
       }
       return;
     }
-    const position = time - rightCueTime;
+    const position = deckBPosition(time);
     if (force) {
       second.currentTime = position;
       if (audio.players.a.paused) return;
@@ -232,17 +239,22 @@ export function createMixSession(chart, selection, bpm, {
   function start(demo, recording = false) {
     if (mode === "finished" || mode === "armed") source.reset();
     try {
-      if (selection === "mix1") refreshLevelsTiming();
+      if (selection === "mix1" && !aiDecks) refreshLevelsTiming();
       audio = getAudio();
-      const values = demo || guided ? initialValues : { ...initialValues, ...liveValues() };
+      if (aiDecks) {
+        audio.players.b.preservesPitch = true;
+        audio.players.b.playbackRate = rateB;
+      }
+      const values = demo || guided || aiDecks ? initialValues : { ...initialValues, ...liveValues() };
       crossfade = values["mixer.crossfade"] ?? crossfade;
       mirrorKnobs(guided ? { ...values, ...liveValues() } : values);
       if (guided) lastValues = values;
       state(demo ? "demo" : "live");
       liveMixerValues = values;
-      if (!demo && !recording && usesPresetEntry()) applyPresetBlend(0, true);
+      if (aiDecks) onMixer(values);
+      if (!aiDecks && !demo && !recording && usesPresetEntry()) applyPresetBlend(0, true);
       else audio.update(values);
-      play(master, 0);
+      play(master, startA);
       if (recording) {
         capture = { events: [], levelsEvents: [], playButtonEvents: [], midiEvents: [] };
         captureMixer(values);
@@ -323,8 +335,12 @@ export function createMixSession(chart, selection, bpm, {
     const clockDeck = tailOffset === null ? master : "b";
     if ((!capture && time >= chart.duration) || audio.players[clockDeck].ended) { stop("finished"); return; }
     if (playing && usesPresetEntry()) syncPresetLevels(time);
+    if (aiDecks) {
+      const cue = chart.aiCues.find(cue => cue.endMs >= time * 1000 && cue.t <= (time + 4) * 1000) ?? null;
+      if (cue !== visibleAiCue) { visibleAiCue = cue; onAiCue(cue); }
+    }
     if (!demo && !guided) {
-      if (usesPresetEntry()) applyPresetBlend(time);
+      if (!aiDecks && usesPresetEntry()) applyPresetBlend(time);
       if (capture && playing && tailOffset === null) {
         const events = capture.levelsEvents;
         const wasPlaying = events.length > 0 && events.at(-1).position !== null;
@@ -350,7 +366,7 @@ export function createMixSession(chart, selection, bpm, {
       replayRecordedLevels(time);
     } else if (selection === "mix1" && guided) syncPresetLevels(time);
   });
-  return {
+  const session = {
     source, stop,
     updateLevelsOffset() {
       if (!canCalibrate()) return;
@@ -366,7 +382,7 @@ export function createMixSession(chart, selection, bpm, {
       syncPresetLevels(time, true);
     },
     startRecording() {
-      if (selection !== "mix1" || !["ready", "finished"].includes(mode)) return false;
+      if (aiDecks || selection !== "mix1" || !["ready", "finished"].includes(mode)) return false;
       armedFor = "record";
       state("armed");
       return true;
@@ -426,8 +442,24 @@ export function createMixSession(chart, selection, bpm, {
     recordMidi(bytes) {
       if (capture) capture.midiEvents.push([mixTime() * 1000, ...bytes]);
     },
+    moveAiKnob(control, value) {
+      if (!aiDecks || mode !== "live") return;
+      const [deck, key] = control.split(".");
+      const row = ROW_BY_CONTROL[key];
+      if (row) screen.knob({ channel: deck === "a" ? 1 : 2, row, position: value / 16383 });
+      session.update({[control]:value});
+    },
     update(values) {
       if (mode === "live" && !guided) {
+        if (aiDecks) {
+          const allowed = Object.fromEntries(Object.entries(values)
+            .filter(([key,value]) => Number.isFinite(value) && key in initialValues));
+          liveMixerValues = { ...liveMixerValues, ...allowed };
+          crossfade = liveMixerValues["mixer.crossfade"];
+          audio.update(liveMixerValues);
+          onMixer(liveMixerValues);
+          return;
+        }
         const next = { ...initialValues, ...values };
         liveMixerValues = next;
         if (usesPresetEntry()) applyPresetBlend(mixTime(), true);
@@ -438,7 +470,9 @@ export function createMixSession(chart, selection, bpm, {
         captureMixer(next);
       }
     },
+    get isAi() { return Boolean(aiDecks); },
     get demo() { return mode === "demo"; },
     destroy() { capture = undefined; stop(); source.destroy(); }
   };
+  return session;
 }

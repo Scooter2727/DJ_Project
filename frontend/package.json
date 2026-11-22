@@ -6,7 +6,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "node --test src/crowd/*.test.js src/mixChart.test.js"
+    "test": "node --test src/crowd/*.test.js src/mixChart.test.js ../backend/aiMix/*.test.mjs"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.2.3",

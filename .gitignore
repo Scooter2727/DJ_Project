@@ -1,2 +1,9 @@
 node_modules/
 dist/
+
+.env
+.env.*
+!.env.example
+/backend/aiMix/library/
+/backend/aiMix/__pycache__/
+/backend/aiMix/.venv/

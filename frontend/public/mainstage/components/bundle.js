@@ -1542,7 +1542,9 @@
       opts = opts || {};
       var tracks = opts.tracks || TRACKS, sel = opts.index || 0, stage = createStage(rootEl), bd = opts.backdrop || new TitleBackdrop();
       var anim = tracks.map(function (_, i) { return { angle: i, grow: i === sel ? 1 : 0 }; });
-      var acc = 0, lastPos = {}, confirmT = -9, clock = 0, slots = [400, 800, 1200], discY = 520;
+      var gap = Math.min(400, W * 0.83 / tracks.length);
+      var slots = tracks.map(function (_, i) { return W / 2 + (i - (tracks.length - 1) / 2) * gap; });
+      var acc = 0, lastPos = {}, confirmT = -9, clock = 0, discY = 520;
       var recordPose;
       var INTRO = opts.intro === false ? 0 : 1.2;
       function eo(t) { t = clamp(t, 0, 1); return 1 - Math.pow(1 - t, 3); }

@@ -1,0 +1,196 @@
+.custom-mix-picker {
+  box-sizing: border-box;
+  width: min(680px, calc(100% - 24px));
+  max-height: calc(100dvh - 28px);
+  padding: clamp(16px, 4vw, 28px);
+  overflow: auto;
+  border: 2px solid #a983ff;
+  border-radius: 6px;
+  background: #1a1028;
+  box-shadow: 0 0 0 4px #0b0814, 0 18px 64px #0009;
+  color: #f6ecd6;
+  font: 14px/1.5 "Space Grotesk", system-ui, sans-serif;
+}
+
+.custom-mix-picker::backdrop {
+  background: #0b0814cb;
+}
+
+.custom-mix-header,
+.custom-mix-selected,
+.custom-mix-track,
+.custom-mix-actions,
+.custom-mix-genres {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.custom-mix-header,
+.custom-mix-selected,
+.custom-mix-track {
+  justify-content: space-between;
+}
+
+.custom-mix-name,
+.custom-mix-deck {
+  color: #a983ff;
+  font: 9px/1.5 "Press Start 2P", "Courier New", monospace;
+}
+
+.custom-mix-header h2 {
+  margin: 7px 0 0;
+  font: clamp(13px, 3vw, 18px)/1.6 "Press Start 2P", "Courier New", monospace;
+}
+
+.custom-mix-header h2:focus {
+  outline: none;
+}
+
+.custom-mix-resume {
+  margin-top: 14px;
+}
+
+.custom-mix-genres,
+.custom-mix-selected {
+  margin: 19px 0 12px;
+  flex-wrap: wrap;
+}
+
+.custom-mix-selected,
+.custom-mix-track {
+  border: 1px solid #3a2660;
+  border-radius: 4px;
+  background: #100a1e;
+  padding: 12px;
+}
+
+.custom-mix-selected .custom-mix-artist {
+  margin-left: 6px;
+}
+
+.custom-mix-genres [aria-pressed="true"],
+.custom-mix-picker .custom-mix-recommended {
+  border-color: #a983ff;
+  color: #f6ecd6;
+  background: #382154;
+}
+
+.custom-mix-search {
+  display: grid;
+  gap: 4px;
+  color: #e1d2f8;
+}
+
+.custom-mix-search input {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid #796592;
+  border-radius: 4px;
+  background: #0b0814;
+  color: #f6ecd6;
+  font: inherit;
+}
+
+.custom-mix-search input:focus-visible {
+  outline: 2px solid #34e0ff;
+  outline-offset: 1px;
+}
+
+.custom-mix-list {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.custom-mix-track-info {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.custom-mix-artist,
+.custom-mix-credits,
+.custom-mix-reason {
+  font-size: 12px;
+  color: #c9bda4;
+}
+
+.custom-mix-reason {
+  color: #6bff9e;
+}
+
+.custom-mix-credits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.custom-mix-credits a {
+  color: #aebeff;
+}
+
+.custom-mix-actions {
+  flex: none;
+}
+
+.custom-mix-picker .mainstage-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.custom-mix-status {
+  margin: 14px 0;
+}
+
+.custom-mix-status[role="alert"],
+.custom-mix-status [role="alert"] {
+  color: #ffacbd;
+}
+
+@media (max-width: 420px) {
+  .custom-mix-track {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+.ai-mixer {
+  position: absolute;
+  z-index: 3;
+  left: 14px;
+  bottom: 14px;
+  color: #f6edff;
+  background: #100a22ef;
+}
+.ai-mixer summary { width: max-content; cursor: pointer; }
+.ai-mixer-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: calc(100vw - 32px);
+  padding: 6px;
+  font: 12px system-ui, sans-serif;
+}
+.ai-mixer-controls fieldset { display: flex; gap: 6px; border: 1px solid #b68aff88; padding: 4px; }
+.ai-mixer-controls label { display: grid; gap: 2px; text-align: center; }
+.ai-mixer-controls input { width: clamp(36px, 6vw, 72px); accent-color: #b68aff; }
+
+.ai-cue {
+  position: absolute;
+  top: 64px;
+  left: 50%;
+  z-index: 2;
+  transform: translateX(-50%);
+  max-width: 60vw;
+  padding: 8px;
+  color: #f6edff;
+  background: #100a22ef;
+  border: 1px solid #b68aff;
+  text-align: center;
+  font: 10px/1.5 "Press Start 2P", monospace;
+}
