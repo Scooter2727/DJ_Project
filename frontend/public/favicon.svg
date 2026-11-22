@@ -1,6 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <rect width="64" height="64" rx="14" fill="#0b0814"/>
-  <text x="32" y="46" text-anchor="middle"
-        font-family="Arial, Helvetica, sans-serif" font-weight="800"
-        font-size="40" fill="#34e0ff">M</text>
+  <path fill="#34e0ff" d="M12 48V16h8l12 14 12-14h8v32h-8V29L32 43 20 29v19z"/>
+  <path fill="#ff3d9a" opacity=".8" d="M16 48V20h4v9l12 14 12-14v-9h4v28h-4V29L32 43 20 29v19z"/>
 </svg>

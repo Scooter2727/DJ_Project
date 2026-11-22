@@ -1,5 +1,4 @@
 html, body, #root {
-  min-width: 320px;
   min-height: 100%;
   margin: 0;
   background: #0b0814;
@@ -14,23 +13,19 @@ body {
   display: flex;
   flex-direction: column;
   height: 100dvh;
-  min-height: 280px;
   background: #0b0814;
   color: #f6ecd6;
 }
 
 .mainstage-stage {
-  display: grid;
-  place-items: center;
-  flex: 1;
-  min-height: 0;
-  container-type: size;
+  position: absolute;
+  inset: 0;
   background: radial-gradient(ellipse at center, #251334, #08060e 76%);
 }
 
 .mainstage-stage .flx-stage {
-  max-width: min(100%, 1600px, calc(100cqh * 16 / 9));
-  min-height: 0;
+  width: 100%;
+  height: 100%;
 }
 
 .mainstage-camera-source {
@@ -63,6 +58,40 @@ body {
   border-bottom: 1px solid #634775;
   background: linear-gradient(#23172f, #130e20);
 }
+
+.mainstage-tools {
+  position: absolute;
+  z-index: 30;
+  top: max(8px, env(safe-area-inset-top));
+  right: max(8px, env(safe-area-inset-right));
+}
+.mainstage-tools[open] {
+  box-sizing: border-box;
+  width: min(380px, calc(100vw - 16px));
+  max-height: calc(100dvh - 16px);
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid #634775;
+  background: #130e20f5;
+}
+.mainstage-tools .mainstage-tools-toggle {
+  display: grid;
+  place-items: center;
+  margin-left: auto;
+  width: 36px;
+  height: 36px;
+  box-sizing: border-box;
+  padding: 0;
+  list-style: none;
+  font: 19px/1 system-ui, sans-serif;
+  opacity: .65;
+}
+.mainstage-tools-toggle::-webkit-details-marker { display: none; }
+.mainstage-tools-toggle:is(:hover, :focus-visible), .mainstage-tools[open] summary { opacity: 1; }
+.mainstage-tools .mainstage-controls { padding: 10px 0 0; border: 0; background: none; }
+.mainstage-tools .mainstage-dev-panel,
+.mainstage-tools .ai-mixer { position: static; width: auto; max-width: 100%; }
+.mainstage-tools .mainstage-status { width: 100%; white-space: normal; }
 
 .mainstage-button,
 .mainstage-select {
@@ -193,10 +222,7 @@ body {
 
 .mainstage-title-overlay {
   position: absolute;
-  inset: 50% auto auto 50%;
-  transform: translate(-50%, -50%);
-  width: min(100%, 1600px, calc(100cqh * 16 / 9));
-  aspect-ratio: 16 / 9;
+  inset: 0;
   pointer-events: none;
 }
 
