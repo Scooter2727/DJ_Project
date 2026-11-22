@@ -232,7 +232,7 @@ function MainstageApp() {
       },
       knobSmoothing: 0,
       reducedMotion: !fullMotion,
-      show: { venue: true, crowd: true, deck: true, hud: true, webcam: true },
+      show: { venue: true, crowd: true, deck: true, hud: true, webcam: true, tempo: false },
       drawWebcamEffects: webcamFiltersRef.current.draw,
       getCrowdHype: dt => {
         const playing = (audioRef.current?.isPlaying(previewDeck) ?? false)

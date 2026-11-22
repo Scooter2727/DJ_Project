@@ -39,7 +39,7 @@ export interface WebcamView {
   top: number;
   mirror: boolean;
 }
-export interface GameplayScreenProps { source?: GameSource; rows?: Row[]; camera?: { c?: number; k?: number }; knobSmoothing?: number; reducedMotion?: boolean; onCrossfadeInput?(midiValue: number): void; show?: { venue?: boolean; crowd?: boolean; deck?: boolean; hud?: boolean; webcam?: boolean }; webcam?: MediaStream | HTMLVideoElement; webcamMirror?: boolean; getCrowdHype?(dt: number): CrowdHypeFrame; drawWebcamEffects?(ctx: CanvasRenderingContext2D, view: WebcamView, hype: CrowdHypeFrame | null, dt: number, reducedMotion: boolean): void; }
+export interface GameplayScreenProps { source?: GameSource; rows?: Row[]; camera?: { c?: number; k?: number }; knobSmoothing?: number; reducedMotion?: boolean; onCrossfadeInput?(midiValue: number): void; show?: { venue?: boolean; crowd?: boolean; deck?: boolean; hud?: boolean; webcam?: boolean; tempo?: boolean }; webcam?: MediaStream | HTMLVideoElement; webcamMirror?: boolean; getCrowdHype?(dt: number): CrowdHypeFrame; drawWebcamEffects?(ctx: CanvasRenderingContext2D, view: WebcamView, hype: CrowdHypeFrame | null, dt: number, reducedMotion: boolean): void; }
 export interface Screen {
   el: HTMLElement;
   knob(ev: KnobEvent): Turn | null;

@@ -541,8 +541,7 @@
   // ---------------------------------------------------------------- Equalizer (drawn into the deck surface)
   // Audio frame shape (from the game, or sampleAudio() for the mockup):
   //   { kick 0..1, bass 0..1, hats 0..1, energy 0..1, bands?: number[] 0..1 (any length, low to high), level?: [l, r] }
-  // Bars rise instantly on a hit and fall smoothly. They are deliberately dim: the bright beams
-  // on the mapped knobs stay the brightest thing on the deck.
+  // Bars rise instantly on a hit and fall smoothly.
   function sampleAudio(time, bpm) {
     var beat = time * bpm / 60, bp = beat - Math.floor(beat), b8 = beat * 2 - Math.floor(beat * 2), b16i = Math.floor(beat * 4), b16 = beat * 4 - b16i;
     var phrase = mod(beat, 32) / 32;                                 // 8-bar phrase: build, peak, breakdown
@@ -581,25 +580,63 @@
   var EQ_ON = ['#1f6f85', '#2d7f8f', '#4a3c96', '#5a3a9e', '#7a2f84', '#8f2a68'];   // dim cyan -> violet -> magenta
   var EQ_OFF = '#18161d';
   function eqCol(rowFrac) { return EQ_ON[Math.min(EQ_ON.length - 1, Math.floor(rowFrac * EQ_ON.length))]; }
+  function drawEqualizerEdges(ctx, edges) {
+    if (!edges.length) return;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'butt';
+    edges.forEach(function (edge) {
+      ctx.beginPath();
+      ctx.moveTo(edge.x1, edge.y1); ctx.lineTo(edge.x2, edge.y2);
+      ctx.strokeStyle = hexA(edge.color, 0.16); ctx.lineWidth = 24; ctx.stroke();
+      ctx.strokeStyle = hexA(edge.color, 0.32); ctx.lineWidth = 15; ctx.stroke();
+      ctx.strokeStyle = hexA(edge.color, 0.58); ctx.lineWidth = 8; ctx.stroke();
+      ctx.strokeStyle = edge.color; ctx.lineWidth = 3; ctx.stroke();
+    });
+    ctx.restore();
+  }
+
   // bank of stacked-pixel bars in flat deck coords. mirror: lows on the right
   Equalizer.prototype.drawBank = function (ctx, x, y, w, h, cols, rows, mirror) {
-    var gap = 5, bw = (w - gap * (cols - 1)) / cols, bh = (h - gap * (rows - 1)) / rows, c, k;
+    var gap = 5, bw = (w - gap * (cols - 1)) / cols, bh = (h - gap * (rows - 1)) / rows;
+    var edges = [];
     ctx.fillStyle = '#0c0b10'; ctx.fillRect(x - 5, y - 5, w + 10, h + 10);
-    for (c = 0; c < cols; c++) {
-      var bi = Math.floor((c + 0.5) / cols * this.n), idx = bi;
-      var lit = Math.round(this.bars[idx] * rows), pk = Math.min(rows - 1, Math.round(this.peaks[idx] * rows) - 1);
-      var bx = x + (mirror ? cols - 1 - c : c) * (bw + gap);
-      for (k = 0; k < rows; k++) {
-        var by = y + h - (k + 1) * bh - k * gap;
-        ctx.fillStyle = k < lit ? eqCol(k / rows) : (k === pk ? '#3a3448' : EQ_OFF);
+    for (var c = 0; c < cols; c++) {
+      var band = Math.floor((c + 0.5) / cols * this.n);
+      var lit = Math.round(this.bars[band] * rows), peak = Math.min(rows - 1, Math.round(this.peaks[band] * rows) - 1);
+      var column = mirror ? cols - 1 - c : c, bx = x + column * (bw + gap);
+      for (var row = 0; row < rows; row++) {
+        var by = y + h - (row + 1) * bh - row * gap, color = eqCol(row / rows);
+        ctx.fillStyle = row < lit ? color : (row === peak ? '#3a3448' : EQ_OFF);
         ctx.fillRect(bx, by, bw, bh);
+        if (row >= lit) continue;
+        if (column === 0) edges.push({ x1: x - 5, y1: by, x2: x - 5, y2: by + bh, color: color });
+        if (column === cols - 1) edges.push({ x1: x + w + 5, y1: by, x2: x + w + 5, y2: by + bh, color: color });
+        if (row === 0 || row === rows - 1) {
+          var borderY = row === 0 ? y + h + 5 : y - 5;
+          edges.push({ x1: bx, y1: borderY, x2: bx + bw, y2: borderY, color: color });
+        }
       }
     }
+    drawEqualizerEdges(ctx, edges);
   };
   Equalizer.prototype.drawMeter = function (ctx, x, y, w, h, rows, side) {
-    var gap = 5, bh = (h - gap * (rows - 1)) / rows, lit = Math.round(this.level[side] * rows), k;
+    var gap = 5, bh = (h - gap * (rows - 1)) / rows, lit = Math.round(this.level[side] * rows);
+    var edges = [], outerX = side === 0 ? x - 4 : x + w + 4;
     ctx.fillStyle = '#0c0b10'; ctx.fillRect(x - 4, y - 4, w + 8, h + 8);
-    for (k = 0; k < rows; k++) { ctx.fillStyle = k < lit ? eqCol(k / rows) : EQ_OFF; ctx.fillRect(x, y + h - (k + 1) * bh - k * gap, w, bh); }
+    for (var row = 0; row < rows; row++) {
+      var by = y + h - (row + 1) * bh - row * gap, color = eqCol(row / rows);
+      ctx.fillStyle = row < lit ? color : EQ_OFF;
+      ctx.fillRect(x, by, w, bh);
+      if (row >= lit) continue;
+      // Follow the outside of the meter pair, leaving the divider between them dark.
+      edges.push({ x1: outerX, y1: by, x2: outerX, y2: by + bh, color: color });
+      if (row === 0 || row === rows - 1) {
+        var borderY = row === 0 ? y + h + 4 : y - 4;
+        edges.push({ x1: x, y1: borderY, x2: x + w, y2: borderY, color: color });
+      }
+    }
+    drawEqualizerEdges(ctx, edges);
   };
 
   // ---------------------------------------------------------------- Deck (retro body + sharp overlay)
@@ -607,6 +644,13 @@
   // retro layer through the camera (stepped edges, early-3D texture feel). Controls the game does
   // not use are drawn "soft": each one blurred and lowered in contrast on its own, so the mapped
   // knobs next to them stay crisp. Mapped knobs themselves are drawn sharp in drawOverlay.
+  var DECK_RIM_COLORS = [C.magenta, C.cyan, C.violet, C.laser];
+  function deckLighting(beat) {
+    return {
+      color: DECK_RIM_COLORS[mod(Math.floor(beat / 4), DECK_RIM_COLORS.length)],
+      pulse: Math.exp(-(beat - Math.floor(beat)) * 6)
+    };
+  }
   var SOFT = 'blur(0.7px) saturate(0.6) contrast(0.7) brightness(0.85)';
   var FX0 = 330 - DECK_EXTENSION, FY0 = 370, FWL = 940 + 2 * DECK_EXTENSION, FHL = 560;
   var _flat = null;
@@ -635,7 +679,7 @@
     ctx.fillStyle = fill; circ(ctx, x, y, r); ctx.fill();
     if (ring) { ctx.strokeStyle = ring; ctx.lineWidth = 3; circ(ctx, x, y, r - 1); ctx.stroke(); }
   }
-  function deckHalf(ctx, ox, o, side) {
+  function deckHalf(ctx, ox, o, side, lighting) {
     var k, i, j;
     soft(ctx, function (ctx) {
       btnLow(ctx, 404 + ox, 405, 13, '#e9dfcb'); btnLow(ctx, 442 + ox, 405, 13, '#e9dfcb');
@@ -649,7 +693,16 @@
         : 0;
       ctx.fillStyle = '#0d0c10'; circ(ctx, jx, jy + 6, 117); ctx.fill();
       ctx.fillStyle = '#19181d'; circ(ctx, jx, jy, 114); ctx.fill();
-      ctx.strokeStyle = '#28272d'; ctx.lineWidth = 6; circ(ctx, jx, jy, 105); ctx.stroke();
+      // Draw the stationary rim before rotating the platter and its markings.
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      circ(ctx, jx, jy, 105);
+      ctx.strokeStyle = hexA(lighting.color, 0.11 + 0.10 * lighting.pulse);
+      ctx.lineWidth = 40; ctx.stroke();
+      ctx.strokeStyle = hexA(lighting.color, 0.20 + 0.14 * lighting.pulse);
+      ctx.lineWidth = 23; ctx.stroke();
+      ctx.strokeStyle = hexA(lighting.color, 0.74 + 0.23 * lighting.pulse);
+      ctx.lineWidth = 7; ctx.stroke();
+      ctx.restore();
       ctx.save(); ctx.translate(jx, jy); ctx.rotate(angle); ctx.translate(-jx, -jy);
       ctx.fillStyle = '#5a5a62'; circ(ctx, jx, jy, 95); ctx.fill();
       ctx.fillStyle = '#6a6a73'; ctx.beginPath(); ctx.arc(jx, jy, 95, Math.PI * 0.9, Math.PI * 1.6); ctx.lineTo(jx, jy); ctx.fill();
@@ -730,21 +783,21 @@
     var pts = [[u0, dy0], [u1, dy0], [u1, dy1], [u0, dy1]].map(function (q) { var p = xfPt(L, q[0], q[1], lift); return [p.x, p.y]; });
     poly(ctx, pts);
   }
-  function drawCrossfader(ctx, L, xf, now, beat, energy) {
+  function drawCrossfader(ctx, L, xf, now, beat, energy, lighting) {
     var u = xf.pos, k, cue = xf.cue, zi = cue ? xfZone(cue.to) : -1, inZone = cue && Math.abs(u - cue.to) <= 0.06;
-    var bp = (beat || 0) - Math.floor(beat || 0), kick = Math.exp(-bp * 6), e = energy == null ? 0.5 : energy;
+    var color = lighting.color, kick = lighting.pulse, e = energy == null ? 0.5 : energy;
     var U0 = -0.16, U1 = 1.16, D0 = -62, D1 = 54;
     ctx.save(); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
     // outer glow, pumping on the kick
     ctx.save(); ctx.globalCompositeOperation = 'lighter';
     xfQuad(ctx, L, U0 - 0.03, U1 + 0.03, D0 - 12, D1 + 12, 2);
-    ctx.strokeStyle = hexA(C.magenta, 0.18 + 0.3 * kick * (0.5 + e)); ctx.lineWidth = 26; ctx.stroke();
-    ctx.strokeStyle = hexA(C.violet, 0.25 + 0.2 * kick); ctx.lineWidth = 12; ctx.stroke();
+    ctx.strokeStyle = hexA(color, 0.18 + 0.3 * kick * (0.5 + e)); ctx.lineWidth = 26; ctx.stroke();
+    ctx.strokeStyle = hexA(color, 0.25 + 0.2 * kick); ctx.lineWidth = 12; ctx.stroke();
     ctx.restore();
     // the plate
     xfQuad(ctx, L, U0, U1, D0, D1, 2); ctx.fillStyle = 'rgba(8,6,14,.96)'; ctx.fill();
-    // neon border: colour blocks chasing round the edge on the beat
-    var cols = [C.magenta, C.violet, C.cyan, C.laser, C.amber], edge = [];
+    // The segments chase on the beat using the same color as the outer deck rim.
+    var edge = [];
     [[U0, D0, U1, D0], [U1, D0, U1, D1], [U1, D1, U0, D1], [U0, D1, U0, D0]].forEach(function (sd, si) {
       var n = si % 2 ? 6 : 16;
       for (var q = 0; q < n; q++) edge.push([lerp(sd[0], sd[2], q / n), lerp(sd[1], sd[3], q / n), lerp(sd[0], sd[2], (q + 0.75) / n), lerp(sd[1], sd[3], (q + 0.75) / n)]);
@@ -752,14 +805,14 @@
     edge.forEach(function (sg, q) {
       var p0 = xfPt(L, sg[0], sg[1], 2), p1 = xfPt(L, sg[2], sg[3], 2);
       var lit = 0.55 + 0.45 * Math.max(0, Math.sin((q / edge.length) * Math.PI * 4 - (beat || 0) * Math.PI));
-      ctx.strokeStyle = hexA(cols[mod(q + Math.floor((beat || 0) * 2), cols.length)], lit); ctx.lineWidth = 5;
+      ctx.strokeStyle = hexA(color, lit); ctx.lineWidth = 5;
       ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
     });
     // LED dots along the top and bottom edges, an EQ that rides the kick
     for (k = 0; k < 22; k++) {
       var uu = lerp(U0 + 0.05, U1 - 0.05, k / 21), on = Math.abs(Math.sin(k * 1.3 + Math.floor(beat || 0) * 0.8)) * (0.4 + 0.6 * kick) > 0.35;
       var dt0 = xfPt(L, uu, D0 + 9, 2), db0 = xfPt(L, uu, D1 - 9, 2);
-      ctx.fillStyle = on ? cols[k % cols.length] : 'rgba(246,236,214,.08)';
+      ctx.fillStyle = on ? hexA(color, 0.85) : 'rgba(246,236,214,.08)';
       ctx.fillRect(dt0.x - 3, dt0.y - 2, 6, 4); ctx.fillRect(db0.x - 3, db0.y - 2, 6, 4);
     }
     // zones: 1 | MID | 2, the asked-for one lit
@@ -774,8 +827,7 @@
     // the track
     var a = xfPt(L, 0, -6, 2), b = xfPt(L, 1, -6, 2);
     ctx.strokeStyle = '#000'; ctx.lineWidth = 12; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-    var tg = ctx.createLinearGradient(a.x, a.y, b.x, b.y); tg.addColorStop(0, hexA(C.magenta, 0.7)); tg.addColorStop(0.5, hexA(C.violet, 0.5)); tg.addColorStop(1, hexA(C.cyan, 0.7));
-    ctx.strokeStyle = tg; ctx.lineWidth = 3; ctx.stroke();
+    ctx.strokeStyle = hexA(color, 0.75 + 0.25 * kick); ctx.lineWidth = 3; ctx.stroke();
     // instruction above the plate, with a fill bar counting down to the move
     if (cue) {
       var destination = Math.abs(cue.to - XF_ZONES[zi].c) < 0.06
@@ -895,14 +947,16 @@
       texture(f, d.x, d.y, d.w, d.h, 0.18);
       f.strokeStyle = '#4a4952'; f.lineWidth = 4; rr(f, d.x + 2, d.y + 2, d.w - 4, d.h - 4, d.r); f.stroke();
       f.fillStyle = '#17161a'; f.fillRect(648 - DECK_EXTENSION, d.y + 10, 4, d.h - 20); f.fillRect(948 + DECK_EXTENSION, d.y + 10, 4, d.h - 20);
-      deckHalf(f, L.flat.deckOffset[1], o, 1); deckHalf(f, L.flat.deckOffset[2], o, 2);
+      var lighting = o.lighting || deckLighting(o.beat || 0);
+      deckHalf(f, L.flat.deckOffset[1], o, 1, lighting);
+      deckHalf(f, L.flat.deckOffset[2], o, 2, lighting);
       mixerFlat(f, L, o);
       f.save(); f.setTransform(1, 0, 0, 1, 0, 0);
       if ('filter' in f) f.filter = SOFT; else f.globalAlpha = 0.6;
       f.drawImage(sl.c, 0, 0); f.restore();
 
       // neon underglow rim, colour cycling on the bar
-      var rimC = [C.magenta, C.cyan, C.violet, C.laser][mod(Math.floor(o.beat / 4), 4)], kk = Math.exp(-(o.beat - Math.floor(o.beat)) * 6);
+      var rimC = lighting.color, kk = lighting.pulse;
       var q0 = L.P(d.x - 14, d.y - 10), q1 = L.P(d.x + d.w + 14, d.y - 10), q2 = L.P(d.x + d.w + 14, d.y + d.h + 4), q3 = L.P(d.x - 14, d.y + d.h + 4);
       ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.lineJoin = 'round';
       poly(ctx, [[q0.x, q0.y], [q1.x, q1.y], [q2.x, q2.y + 26], [q3.x, q3.y + 26]]);
@@ -1105,24 +1159,24 @@
   };
 
   // ---------------------------------------------------------------- HUD (sharp)
-  function plate(ctx, x, y, w, h) {
+  function plate(ctx, x, y, w, h, outline = C.violet) {
     var c = 10;
     poly(ctx, [[x + c, y], [x + w - c, y], [x + w, y + c], [x + w, y + h - c], [x + w - c, y + h], [x + c, y + h], [x, y + h - c], [x, y + c]]);
     ctx.fillStyle = 'rgba(11,8,20,.82)'; ctx.fill();
     ctx.strokeStyle = '#6a6478'; ctx.lineWidth = 4; ctx.stroke();
-    ctx.strokeStyle = hexA(C.violet, 0.8); ctx.lineWidth = 2;
+    ctx.strokeStyle = hexA(outline, 0.8); ctx.lineWidth = 2;
     poly(ctx, [[x + c + 4, y + 5], [x + w - c - 4, y + 5], [x + w - 5, y + c + 4], [x + w - 5, y + h - c - 4], [x + w - c - 4, y + h - 5], [x + c + 4, y + h - 5], [x + 5, y + h - c - 4], [x + 5, y + c + 4]]); ctx.stroke();
   }
   // Top left: score. Top right: webcam slot.
   var CAM = { x: W - 342, y: 20, w: 320, h: 180 };   // 16:9 inner frame for the player's live webcam
   var HYPE_BAR = { x: CAM.x - 76, y: CAM.y + 27, w: 52, h: CAM.h - 51 };
 
-  function drawHypeMeter(ctx, frame) {
+  function drawHypeMeter(ctx, frame, outline) {
     var r = HYPE_BAR, color = [C.violet, C.cyan, C.amber, C.magenta][frame.tier];
     var x = r.x + 9, y = r.y + 5, w = r.w - 18, h = r.h - 10;
     var fill = h * clamp(frame.level / 100, 0, 1);
     ctx.save();
-    plate(ctx, r.x - 8, CAM.y - 12, r.w + 16, CAM.h + 24);
+    plate(ctx, r.x - 8, CAM.y - 12, r.w + 16, CAM.h + 24, outline);
     ctx.fillStyle = C.ink; ctx.fillRect(x, y, w, h);
     ctx.fillStyle = frame.celebration ? C.cream : color;
     ctx.fillRect(x, y + h - fill, w, fill);
@@ -1218,7 +1272,7 @@
     cam: CAM,
     draw: function (ctx, s) {
       ctx.save(); ctx.textBaseline = 'alphabetic';
-      plate(ctx, 22, 20, 330, 92);
+      plate(ctx, 22, 20, 330, 92, s.outline);
       ctx.font = '12px ' + FONT; ctx.fillStyle = C.creamDim; ctx.textAlign = 'left'; ctx.fillText('SCORE', 44, 50);
       ctx.font = '30px ' + FONT; ctx.fillStyle = C.cream; ctx.fillText(pad(s.score, 7), 44, 93);
       if (s.award) {
@@ -1242,7 +1296,7 @@
     drawWebcam: function (ctx, video, o) {
       o = o || {}; var r = CAM, k;
       ctx.save();
-      plate(ctx, r.x - 12, r.y - 12, r.w + 24, r.h + 24);
+      plate(ctx, r.x - 12, r.y - 12, r.w + 24, r.h + 24, o.outline);
       ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
       var live = video && video.readyState >= 2 && video.videoWidth > 0;
       if (live) {
@@ -1803,7 +1857,8 @@
       });
 
       // retro layer
-      var vo = { t: tAbs, e: energy, beat: hype?.beat ?? beat, fxOn: energy > 0.6, eq: eq, wheels: f.wheels, crossfade: f.crossfade };
+      var lightingBeat = hype?.beat ?? beat, lighting = deckLighting(lightingBeat);
+      var vo = { t: tAbs, e: energy, beat: lightingBeat, fxOn: energy > 0.6, eq: eq, wheels: f.wheels, crossfade: f.crossfade, lighting: lighting };
       stage.beginLow();
       if (show.venue) Venue.draw(stage.low, vo); else { stage.low.fillStyle = C.void; stage.low.fillRect(0, 0, W, H); }
       if (show.hud && confetti) drawHypeConfetti(stage.low, confetti.pieces, celebration, false);
@@ -1830,7 +1885,7 @@
         xf.target = faderTarget;
         xf.pos = xf.pos === null || reducedMotion ? xf.target : lerp(xf.pos, xf.target, 1 - Math.exp(-dt / 0.045));
         xf.cue = f.crossfadeCue;
-        drawCrossfader(s, L, xf, clock, vo.beat, energy);
+        drawCrossfader(s, L, xf, clock, lightingBeat, energy, lighting);
       }
       (f.notes || []).forEach(function (n) {
         if (L.rows.indexOf(n.row) < 0 || n.state === 'hit') return;
@@ -1852,14 +1907,14 @@
       }
       fx.draw(s);
       if (scoreAward && clock - scoreAward.at >= 1) scoreAward = null;
-      if (show.hud) HUD.draw(s, { score: f.score, award: scoreAward, clock: clock, reducedMotion: reducedMotion });
+      if (show.hud) HUD.draw(s, { score: f.score, award: scoreAward, clock: clock, reducedMotion: reducedMotion, outline: lighting.color });
       if (show.hud && f.mixerGuide) drawRecordedFaders(s, f.mixerGuide);
       if (show.hud && show.webcam !== false) HUD.drawWebcam(s, webcam, {
-        mirror: webcamMirror, t: tAbs, effects: opts.drawWebcamEffects, hype: hype, dt: dt, reducedMotion: reducedMotion
+        mirror: webcamMirror, t: tAbs, effects: opts.drawWebcamEffects, hype: hype, dt: dt, reducedMotion: reducedMotion, outline: lighting.color
       });
       if (show.hud && hype) {
-        drawHypeMeter(s, hype);
-        drawHypeTempo(s, hype);
+        drawHypeMeter(s, hype, lighting.color);
+        if (show.tempo !== false) drawHypeTempo(s, hype);
       }
     }
     stage.run(render);
