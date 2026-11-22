@@ -90,8 +90,19 @@ export function buildMixChart(recording, manifest, selection = "mix1") {
     }
   }
   notes.sort((a, b) => a.time - b.time);
+  const fades = [];
+  if (selection === "mix1") {
+    const points = controlChanges(recordedPositions(events, "mixer.crossfade"));
+    gestures(points, (first, base, peak) => {
+      fades.push({ start: songTime(first.t), end: songTime(peak.t), to: peak.value / MAX });
+    });
+  }
   return { notes, entry, duration: songTime(recording.durationMs), valuesAt(time) {
     return events[indexAt(events, (time - offset) * 1000)].values;
+  }, crossfadeCueAt(time) {
+    const fade = fades.find(move => move.end >= time);
+    if (!fade || fade.start - time > APPROACH) return null;
+    return { to: fade.to, ready: Math.min(1, 1 - (fade.start - time) / APPROACH) };
   }, tracesAt(time) {
     const from = (time - offset) * 1000, windowMs = APPROACH * 1000, traces = {};
     for (const [lane, points] of Object.entries(curves)) {
@@ -163,7 +174,8 @@ export function createMixSource(chart, bpm, readTransport, onFrame) {
       return { time, bpm, approach: APPROACH, notes: visible, score, combo,
         multiplier: Math.min(4, 1 + Math.floor(combo / 10)), mode: demo ? "demo" : "live",
         audio: transport.audio, entryCue: transport.entryCue, jogCues: transport.jogCues, recordedMix: true, traces: chart.tracesAt(time),
-        wheels: transport.wheels, crossfade: transport.crossfade, guided: transport.guided, mixerGuide: transport.mixerGuide };
+        wheels: transport.wheels, crossfade: transport.crossfade, crossfadeCue: transport.crossfadeCue,
+        guided: transport.guided, mixerGuide: transport.mixerGuide };
     },
     destroy() { unsubscribe?.(); }
   };

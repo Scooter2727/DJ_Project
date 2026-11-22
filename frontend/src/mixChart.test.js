@@ -71,6 +71,32 @@ test("the guide drops vertically onto the knob pointer throughout its upper semi
   }
 });
 
+test("the jog arrows point and travel counterclockwise on A and clockwise on B, including before play", () => {
+  const window = {};
+  runInNewContext(asset("mainstage/components/bundle.js"), { window });
+  const { Deck, makeLayout } = window.FLXHero;
+  const layout = makeLayout();
+  function firstArrow(deck, remaining, clock, reduced = false) {
+    const triangles = [];
+    let path;
+    const ctx = { save() {}, restore() {}, translate() {}, scale() {}, fillRect() {}, strokeRect() {},
+      fillText() {}, strokeText() {}, fill() {}, stroke() {}, measureText: () => ({ width: 150 }),
+      beginPath() { path = []; }, moveTo(x, y) { path.push([x, y]); }, lineTo(x, y) { path.push([x, y]); },
+      closePath() { if (path.length === 3) triangles.push(path); } };
+    Deck.drawJogCue(ctx, layout, { deck, remaining, lead: 3 }, 60 / 126, reduced, clock);
+    return triangles[0];
+  }
+  for (const [deck, direction] of [["a", -1], ["b", 1]]) {
+    for (const remaining of [0, 2]) {
+      const [tip, side1, side2] = firstArrow(deck, remaining, 0);
+      const [nextTip] = firstArrow(deck, remaining, 0.05);
+      assert.equal(Math.sign(tip[0] - (side1[0] + side2[0]) / 2), direction);
+      assert.equal(Math.sign(nextTip[0] - tip[0]), direction);
+      assert.deepEqual(firstArrow(deck, remaining, 1, true), firstArrow(deck, remaining, 0, true));
+    }
+  }
+});
+
 test("signals drop on ten persistent guides that end at their projected knobs", () => {
   const window = {};
   runInNewContext(asset("mainstage/components/bundle.js"), { window });
@@ -110,6 +136,47 @@ function setup(selection = "mix1", options = {}, customRecording) {
   session.attach(view);
   return { session, players, starts, states, mixes, judgments, frame: () => session.source.frame(50), turn, data };
 }
+
+test("the right platter countdown follows the calibrated Levels entry in play and preview", () => {
+  const entry = chart.entry + 0.75 - 0.525;
+  for (const preview of [false, true]) {
+    const { session, players, frame } = setup("mix1", { getLevelsDelayMs: () => -525 });
+    assert.equal(frame().jogCues[0].deck, "a");
+    if (preview) session.preview(); else session.togglePlayback();
+    players.a.currentTime = entry - 3.01;
+    assert.deepEqual(frame().jogCues, []);
+    for (const remaining of [2.99, 1.99, 0.99, 0]) {
+      players.a.currentTime = entry - remaining;
+      const [cue] = frame().jogCues;
+      assert.equal(cue.deck, "b");
+      assert.equal(Math.ceil(cue.remaining), Math.ceil(remaining));
+      assert.equal(players.b.paused, remaining > 0);
+    }
+  }
+});
+
+test("live fader mirrors the player while preview and move targets use the selected recording", () => {
+  const mix = { durationMs: 15000, events: [
+    { t: 0, values: { "mixer.crossfade": 8192 } },
+    { t: 10000, values: { "mixer.crossfade": 6500 } },
+    { t: 10100, values: { "mixer.crossfade": 4900 } },
+  ] };
+  const live = { "mixer.crossfade": 100 };
+  const { session, players, frame } = setup("mix1", { liveValues: () => live }, mix);
+  assert.equal(frame().crossfade, 100);
+  session.togglePlayback();
+  players.a.currentTime = 8;
+  assert.deepEqual(frame().crossfadeCue, { to: 4900 / 16383, ready: 0.5 });
+  live["mixer.crossfade"] = 12000;
+  assert.equal(frame().crossfade, 12000);
+  session.stop();
+  session.preview();
+  players.a.currentTime = 10;
+  assert.equal(frame().crossfade, 6500);
+  players.a.currentTime = 11;
+  assert.equal(frame().crossfade, 4900);
+  assert.equal(frame().crossfadeCue, null);
+});
 
 test("a captured mix replays the recorded crossfader and manual Levels entry", () => {
   let captured;

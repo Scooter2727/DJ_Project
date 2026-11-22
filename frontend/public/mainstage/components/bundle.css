@@ -1,6 +1,10 @@
 @import url("https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Space+Grotesk:wght@400;500;700&display=swap");
 .flx-stage { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #0b0814; overflow: hidden; }
 .flx-stage:focus-visible { outline: 3px solid #f6ecd6; outline-offset: -3px; }
+.flx-crossfader { position: absolute; margin: 0; opacity: 0; cursor: ew-resize; }
+.flx-crossfader:focus-visible { appearance: none; opacity: 1; background: transparent; outline: 2px solid #34e0ff; }
+.flx-crossfader:focus-visible::-webkit-slider-thumb { appearance: none; width: 0; height: 0; }
+.flx-cue-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .flx-bar { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 12px 16px; background: #1a1028; color: #f6ecd6; font: 500 13px/18px "Space Grotesk", system-ui, sans-serif; }
 .flx-bar .flx-group { display: flex; gap: 6px; align-items: center; }
 .flx-bar .flx-label { color: #c9bda4; font-size: 12px; margin-right: 4px; }

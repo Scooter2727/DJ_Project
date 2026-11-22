@@ -160,20 +160,23 @@
     var lctx = lo.getContext('2d', { willReadFrequently: true }); lctx.imageSmoothingEnabled = false;
     var sctx = sh.getContext('2d');
     var raf = 0, last = 0, running = false;
+    function resetFrameTime() { last = 0; }
     return {
       el: wrap, low: lctx, sharp: sctx,
       beginLow: function () { lctx.setTransform(LS, 0, 0, LS, 0, 0); },
       endLow: function (step) { lctx.setTransform(1, 0, 0, 1, 0, 0); dither(lctx, LW, LH, step || 22); },
-      run: function (fn) {
+      run: function (fn, options) {
         running = true;
+        document.addEventListener('visibilitychange', resetFrameTime);
         var tick = function (ts) {
           if (!running) return;
-          var dt = last ? Math.min(0.05, (ts - last) / 1000) : 0.016; last = ts;
-          fn(dt, ts / 1000); raf = requestAnimationFrame(tick);
+          var elapsed = last ? (ts - last) / 1000 : 0.016; last = ts;
+          fn(options?.timeline ? elapsed : Math.min(0.05, elapsed), ts / 1000);
+          if (running) raf = requestAnimationFrame(tick);
         };
         raf = requestAnimationFrame(tick);
       },
-      stop: function () { running = false; cancelAnimationFrame(raf); }
+      stop: function () { running = false; cancelAnimationFrame(raf); document.removeEventListener('visibilitychange', resetFrameTime); }
     };
   }
 
@@ -332,12 +335,13 @@
       // No edge lines or markings: the motion alone gives the shape.
       var gridA = (0.22 + 0.2 * kick) * LL, span = H + 40 - top;
       function rowY(z) { return top + Math.pow(z, 2.2) * span; }
+      var floorBeat = o.beat + (o.floorTravel || 0);
       var wedge = o.road ? (o.roadWidth || 3) : 0, rows = o.road ? 14 : 9;   // road: wider wedge, rows reach further into the distance
       function edge(y, sg) { return vx + sg * wedge * (40 + 220 * (y - top) / span); }   // follows the converging grid lines
       ctx.lineWidth = 3;
       for (i = 0; i < rows; i++) {
-        var z = (i + bp) / rows, y = rowY(z);
-        ctx.strokeStyle = hexA(i % 2 ? C.magenta : C.violet, gridA * (0.4 + z));
+        var z = (i + mod(floorBeat, 1)) / rows, y = rowY(z);
+        ctx.strokeStyle = hexA((i - Math.floor(floorBeat)) % 2 ? C.magenta : C.violet, gridA * (0.4 + z));
         ctx.beginPath();
         if (o.road) { ctx.moveTo(edge(y, -1), y); ctx.lineTo(edge(y, 1), y); }
         else { ctx.moveTo(0, y); ctx.lineTo(W, y); }
@@ -385,11 +389,22 @@
             });
           }
           ppl.sort(function (a, b) { return a.y - b.y; });
-          _floorCrowd = new Crowd(0, ppl); _floorCrowd.wedge = wedge; _floorCrowd.last = o.t;
+          // The densely packed back rows repeat the same beat cycle. Keep their pixel silhouettes
+          // in a small sprite sequence and draw the people closest to the camera in real time.
+          var split = ppl.findIndex(function (p) { return p.y > top + span * 0.32; });
+          if (split < 0) split = ppl.length;
+          _floorCrowd = { wedge: wedge, back: new Crowd(0, ppl.slice(0, split)),
+            front: new Crowd(0, ppl.slice(split)), frames: [] };
         }
-        var fdt = clamp(o.t - _floorCrowd.last, 0, 0.05); _floorCrowd.last = o.t;
-        _floorCrowd.update(fdt, 0.95);
-        _floorCrowd.draw(ctx, { t: o.t, e: 0.95, beat: o.beat });
+        var frame = Math.floor(bp * 12), silhouettes = _floorCrowd.frames[frame];
+        if (!silhouettes) {
+          silhouettes = document.createElement('canvas'); silhouettes.width = LW; silhouettes.height = LH;
+          var peopleCtx = silhouettes.getContext('2d'); peopleCtx.scale(LS, LS);
+          _floorCrowd.back.draw(peopleCtx, { t: 0, e: 0.95, beat: frame / 12 });
+          _floorCrowd.frames[frame] = silhouettes;
+        }
+        ctx.drawImage(silhouettes, 0, 0, W, H);
+        _floorCrowd.front.draw(ctx, { t: o.t, e: 0.95, beat: o.beat });
       }
       // road mode: equalizer bars standing along both borders of the moving wedge, receding into the
       // distance. Sized by perspective; a kick ripples from the stage toward the player.
@@ -632,15 +647,17 @@
       var wheel = o.wheels && o.wheels[side === 1 ? 'a' : 'b'], angle = wheel
         ? wheel.time * Math.PI * 2 * 33.333333 / 60
         : 0;
-      ctx.save(); ctx.translate(jx, jy); ctx.rotate(angle); ctx.translate(-jx, -jy);
       ctx.fillStyle = '#0d0c10'; circ(ctx, jx, jy + 6, 117); ctx.fill();
       ctx.fillStyle = '#19181d'; circ(ctx, jx, jy, 114); ctx.fill();
       ctx.strokeStyle = '#28272d'; ctx.lineWidth = 6; circ(ctx, jx, jy, 105); ctx.stroke();
+      ctx.save(); ctx.translate(jx, jy); ctx.rotate(angle); ctx.translate(-jx, -jy);
       ctx.fillStyle = '#5a5a62'; circ(ctx, jx, jy, 95); ctx.fill();
       ctx.fillStyle = '#6a6a73'; ctx.beginPath(); ctx.arc(jx, jy, 95, Math.PI * 0.9, Math.PI * 1.6); ctx.lineTo(jx, jy); ctx.fill();
       ctx.strokeStyle = '#c9c9cf'; ctx.lineWidth = 3; ctx.beginPath();
-      for (k = 0; k < 40; k++) { var a = k / 40 * Math.PI * 2; ctx.moveTo(jx + Math.cos(a) * 45, jy + Math.sin(a) * 45); ctx.lineTo(jx + Math.cos(a) * 55, jy + Math.sin(a) * 55); }
+      for (k = 0; k < 40; k++) { var a = k / 40 * Math.PI * 2, radius = k % 5 === 0 ? 62 : 55; ctx.moveTo(jx + Math.cos(a) * 45, jy + Math.sin(a) * 45); ctx.lineTo(jx + Math.cos(a) * radius, jy + Math.sin(a) * radius); }
       ctx.stroke();
+      ctx.strokeStyle = C.cream; ctx.lineWidth = 8;
+      ctx.beginPath(); ctx.moveTo(jx + 66, jy); ctx.lineTo(jx + 90, jy); ctx.stroke();
       ctx.fillStyle = '#2e2e35'; circ(ctx, jx, jy, 40); ctx.fill();
       ctx.strokeStyle = '#aaaab3'; ctx.lineWidth = 5; circ(ctx, jx, jy, 30); ctx.stroke();
       ctx.fillStyle = '#3a3a42'; circ(ctx, jx, jy, 20); ctx.fill();
@@ -694,22 +711,177 @@
         else soft(ctx, function (ctx) { knobLow(ctx, x, y, F.knobR); });
       });
     });
-    soft(ctx, function (ctx) {
-      [760, 840].forEach(function (x) {
-        ctx.fillStyle = '#1b140e'; ctx.fillRect(x - 13, 725, 26, 15);
-        ctx.strokeStyle = C.amber; ctx.lineWidth = 2; ctx.strokeRect(x - 13, 725, 26, 15);
-      });
-      ctx.fillStyle = '#0a090d'; ctx.fillRect(730, 882, 140, 6);
-      var crossfade = Number.isFinite(o.crossfade) ? Math.max(0, Math.min(16383, o.crossfade)) / 16383 : 0.5;
-      var crossfadeX = 730 + crossfade * 140;
-      ctx.fillStyle = '#5a5a63'; ctx.fillRect(crossfadeX - 8, 870, 16, 30);
-      ctx.fillStyle = C.cyan; ctx.fillRect(crossfadeX - 5, 878, 10, 3);
+    if (o.eq) {
+      o.eq.drawMeter(ctx, 758, 522, 36, 226, 12, 0);
+      o.eq.drawMeter(ctx, 806, 522, 36, 226, 12, 1);
+    }
+  }
+
+  var XF = { x0: 610, x1: 990, y: 828 };   // a big crossfader: it fills the bottom of the mixer
+  function xfPt(L, u, dy, lift) { var p = L.P(lerp(XF.x0, XF.x1, u), XF.y + (dy || 0)); return { x: p.x, y: p.y - (lift || 0) * p.s, s: p.s }; }
+  function xfCap(ctx, L, u, lift, fill) {   // a cap as a projected box, 40 x 64 on the deck plane
+    var cx = lerp(XF.x0, XF.x1, u), pts = [[-20, -32], [20, -32], [20, 32], [-20, 32]].map(function (q) { var p = L.P(cx + q[0], XF.y + q[1]); return [p.x, p.y - lift * p.s]; });
+    poly(ctx, pts); ctx.fillStyle = fill; ctx.fill();
+  }
+  // The three printed zone labels surround the exact recorded target on the rail.
+  var XF_ZONES = [{ c: 0, w: 0.2, label: '1' }, { c: 0.5, w: 0.2, label: 'MID' }, { c: 1, w: 0.2, label: '2' }];   // 1 = channel 1 side, 2 = channel 2 side
+  function xfZone(to) { return to <= 0.25 ? 0 : to >= 0.75 ? 2 : 1; }
+  function xfQuad(ctx, L, u0, u1, dy0, dy1, lift) {
+    var pts = [[u0, dy0], [u1, dy0], [u1, dy1], [u0, dy1]].map(function (q) { var p = xfPt(L, q[0], q[1], lift); return [p.x, p.y]; });
+    poly(ctx, pts);
+  }
+  function drawCrossfader(ctx, L, xf, now, beat, energy) {
+    var u = xf.pos, k, cue = xf.cue, zi = cue ? xfZone(cue.to) : -1, inZone = cue && Math.abs(u - cue.to) <= 0.06;
+    var bp = (beat || 0) - Math.floor(beat || 0), kick = Math.exp(-bp * 6), e = energy == null ? 0.5 : energy;
+    var U0 = -0.16, U1 = 1.16, D0 = -62, D1 = 54;
+    ctx.save(); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    // outer glow, pumping on the kick
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    xfQuad(ctx, L, U0 - 0.03, U1 + 0.03, D0 - 12, D1 + 12, 2);
+    ctx.strokeStyle = hexA(C.magenta, 0.18 + 0.3 * kick * (0.5 + e)); ctx.lineWidth = 26; ctx.stroke();
+    ctx.strokeStyle = hexA(C.violet, 0.25 + 0.2 * kick); ctx.lineWidth = 12; ctx.stroke();
+    ctx.restore();
+    // the plate
+    xfQuad(ctx, L, U0, U1, D0, D1, 2); ctx.fillStyle = 'rgba(8,6,14,.96)'; ctx.fill();
+    // neon border: colour blocks chasing round the edge on the beat
+    var cols = [C.magenta, C.violet, C.cyan, C.laser, C.amber], edge = [];
+    [[U0, D0, U1, D0], [U1, D0, U1, D1], [U1, D1, U0, D1], [U0, D1, U0, D0]].forEach(function (sd, si) {
+      var n = si % 2 ? 6 : 16;
+      for (var q = 0; q < n; q++) edge.push([lerp(sd[0], sd[2], q / n), lerp(sd[1], sd[3], q / n), lerp(sd[0], sd[2], (q + 0.75) / n), lerp(sd[1], sd[3], (q + 0.75) / n)]);
     });
-    // channel (volume) faders -> a pair of narrow level meters on the surface
-    if (o.eq) { o.eq.drawMeter(ctx, 752, 752, 16, 98, 8, 0); o.eq.drawMeter(ctx, 832, 752, 16, 98, 8, 1); }
+    edge.forEach(function (sg, q) {
+      var p0 = xfPt(L, sg[0], sg[1], 2), p1 = xfPt(L, sg[2], sg[3], 2);
+      var lit = 0.55 + 0.45 * Math.max(0, Math.sin((q / edge.length) * Math.PI * 4 - (beat || 0) * Math.PI));
+      ctx.strokeStyle = hexA(cols[mod(q + Math.floor((beat || 0) * 2), cols.length)], lit); ctx.lineWidth = 5;
+      ctx.beginPath(); ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y); ctx.stroke();
+    });
+    // LED dots along the top and bottom edges, an EQ that rides the kick
+    for (k = 0; k < 22; k++) {
+      var uu = lerp(U0 + 0.05, U1 - 0.05, k / 21), on = Math.abs(Math.sin(k * 1.3 + Math.floor(beat || 0) * 0.8)) * (0.4 + 0.6 * kick) > 0.35;
+      var dt0 = xfPt(L, uu, D0 + 9, 2), db0 = xfPt(L, uu, D1 - 9, 2);
+      ctx.fillStyle = on ? cols[k % cols.length] : 'rgba(246,236,214,.08)';
+      ctx.fillRect(dt0.x - 3, dt0.y - 2, 6, 4); ctx.fillRect(db0.x - 3, db0.y - 2, 6, 4);
+    }
+    // zones: 1 | MID | 2, the asked-for one lit
+    XF_ZONES.forEach(function (z, i) {
+      var u0 = Math.max(-0.06, z.c - z.w / 2), u1 = Math.min(1.06, z.c + z.w / 2), lit = i === zi;
+      xfQuad(ctx, L, u0, u1, -44, 38, 2);
+      ctx.fillStyle = lit ? hexA(C.cyan, 0.25 + 0.3 * (cue ? cue.ready : 0)) : 'rgba(246,236,214,.06)'; ctx.fill();
+      if (lit) { ctx.strokeStyle = hexA(C.cyan, 0.6 + 0.4 * cue.ready); ctx.lineWidth = 3; ctx.stroke(); }
+      var lp = xfPt(L, z.c, 32, 2);
+      ctx.font = '14px ' + FONT; ctx.textAlign = 'center'; ctx.fillStyle = lit ? C.cream : hexA(C.creamDim, 0.6); ctx.fillText(z.label, lp.x, lp.y + 5);
+    });
+    // the track
+    var a = xfPt(L, 0, -6, 2), b = xfPt(L, 1, -6, 2);
+    ctx.strokeStyle = '#000'; ctx.lineWidth = 12; ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    var tg = ctx.createLinearGradient(a.x, a.y, b.x, b.y); tg.addColorStop(0, hexA(C.magenta, 0.7)); tg.addColorStop(0.5, hexA(C.violet, 0.5)); tg.addColorStop(1, hexA(C.cyan, 0.7));
+    ctx.strokeStyle = tg; ctx.lineWidth = 3; ctx.stroke();
+    // instruction above the plate, with a fill bar counting down to the move
+    if (cue) {
+      var destination = Math.abs(cue.to - XF_ZONES[zi].c) < 0.06
+        ? (zi === 1 ? 'MIDDLE' : XF_ZONES[zi].label) : Math.round(cue.to * 100) + '%';
+      var word = (inZone ? 'HOLD ' : 'SLIDE TO ') + destination;
+      var tp = xfPt(L, 0.5, -88, 2);
+      ctx.font = '16px ' + FONT; var tw = ctx.measureText(word).width + 30;
+      ctx.fillStyle = 'rgba(8,6,14,.95)'; ctx.fillRect(tp.x - tw / 2, tp.y - 18, tw, 32);
+      ctx.strokeStyle = C.cyan; ctx.lineWidth = 3; ctx.strokeRect(tp.x - tw / 2 + 1.5, tp.y - 16.5, tw - 3, 29);
+      ctx.fillStyle = hexA(C.cyan, 0.4); ctx.fillRect(tp.x - tw / 2 + 3, tp.y + 8, (tw - 6) * cue.ready, 4);
+      ctx.fillStyle = C.cream; ctx.fillText(word, tp.x, tp.y + 2);
+      if (!inZone) {
+        xfQuad(ctx, L, cue.to - 0.045, cue.to + 0.045, -32, 32, 12);
+        ctx.strokeStyle = C.cyan; ctx.lineWidth = 3; ctx.stroke();
+        var dir = cue.to > u ? 1 : -1, s0 = xfPt(L, u + dir * 0.1, -6, 12), s1 = xfPt(L, cue.to - dir * 0.05, -6, 12);
+        ctx.strokeStyle = '#000'; ctx.lineWidth = 11; ctx.beginPath(); ctx.moveTo(s0.x, s0.y); ctx.lineTo(s1.x, s1.y); ctx.stroke();
+        ctx.strokeStyle = C.cyan; ctx.lineWidth = 6; ctx.stroke();
+        ctx.fillStyle = C.cyan; ctx.beginPath(); ctx.moveTo(s1.x + dir * 18, s1.y); ctx.lineTo(s1.x - dir * 3, s1.y - 14); ctx.lineTo(s1.x - dir * 3, s1.y + 14); ctx.closePath(); ctx.fill();
+      }
+    }
+    // the cap
+    for (var h = 2; h <= 12; h += 2) xfCap(ctx, L, u, h, h === 2 ? '#05040a' : '#3a3940');
+    xfCap(ctx, L, u, 12, inZone ? C.cyan : C.cream);
+    var cl0 = xfPt(L, u, -26, 12), cl1 = xfPt(L, u, 26, 12);
+    ctx.strokeStyle = C.ink; ctx.lineWidth = 4; ctx.beginPath(); ctx.moveTo(cl0.x, cl0.y); ctx.lineTo(cl1.x, cl1.y); ctx.stroke();
+    var mp = (now - (xf.moveT == null ? -9 : xf.moveT)) / 0.3;
+    if (mp < 1) { var g = xfPt(L, u, 0, 12); ctx.strokeStyle = hexA(C.cyan, 0.8 * (1 - mp)); ctx.lineWidth = 3; ctx.strokeRect(g.x - 27, g.y - 42, 54, 76); }
+    ctx.restore();
+  }
+
+  // ---------------------------------------------------------------- Jog wheel moves (sharp)
+  // The numbered countdown uses seconds to the audio cue. Its glow pulses on the track tempo.
+  function jogCenter(L, ch) { return { x: 510 + L.flat.deckOffset[ch], y: 612 }; }
+  function pixelArrow(ctx, x, y, dir, size, col) {   // chunky right/left arrow built from blocks
+    var p = size / 6; ctx.fillStyle = col;
+    ctx.fillRect(x - dir * 3 * p - (dir < 0 ? 4 * p : 0), y - p, 4 * p, 2 * p);
+    for (var i = 0; i < 4; i++) ctx.fillRect(x + dir * i * p - (dir < 0 ? p : 0), y - (4 - i) * p, p, (4 - i) * 2 * p);
+  }
+  function drawJogCue(ctx, L, cue, spb, reducedMotion, animationTime) {
+    var c = jogCenter(L, cue.deck === 'a' ? 1 : 2), R0 = 108, k;
+    ctx.save(); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    var remaining = cue.remaining, n = Math.max(0, Math.ceil(remaining));
+    var sgn = cue.deck === 'a' ? -1 : 1;
+    var color = sgn < 0 ? C.magenta : C.cyan;
+    var onBeat = reducedMotion ? 0 : Math.exp(-mod(-remaining / spb, 1) * 6);
+    var spinning = n === 0, cp = L.P(c.x, c.y), top = L.P(c.x, c.y - R0 - 30);
+    if (cue.bonus || cue.matched) {
+      planeCircle(ctx, L, c.x, c.y, R0 + 8, 0);
+      ctx.strokeStyle = C.laser; ctx.lineWidth = 7; ctx.stroke();
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = '29px ' + FONT;
+      var result = cue.bonus ? '+' + cue.bonus : 'ON CUE';
+      ctx.strokeStyle = C.void; ctx.lineWidth = 9; ctx.strokeText(result, cp.x, cp.y);
+      ctx.fillStyle = C.laser; ctx.fillText(result, cp.x, cp.y);
+    } else {
+      // the whole disc lights up, pulsing on every beat of the count (brighter on the SPIN beat)
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      planeCircle(ctx, L, c.x, c.y, R0 + 26, 0); ctx.fillStyle = hexA(color, (spinning ? 0.22 : 0.09) + 0.16 * onBeat); ctx.fill();
+      ctx.restore();
+      planeCircle(ctx, L, c.x, c.y, R0, 0); ctx.strokeStyle = 'rgba(8,6,14,.9)'; ctx.lineWidth = 14; ctx.stroke();
+      var fill = clamp(1 - remaining / (cue.lead || 3), 0, 1);
+      planeCircle(ctx, L, c.x, c.y, R0, 0, 0, sgn * Math.PI * 2 * fill); ctx.strokeStyle = color; ctx.lineWidth = 8; ctx.stroke();
+      // Zero radians is twelve o'clock. Positive angles move right across the top.
+      var phase = reducedMotion ? 0 : animationTime * Math.PI * 2 / (4 * spb);
+      for (k = 0; k < 3; k++) {
+        var angle = sgn * (phase + k * Math.PI * 2 / 3);
+        var tip = planePt(L, c.x, c.y, R0 + 12, angle, 0);
+        var tail = planePt(L, c.x, c.y, R0 + 12, angle - sgn * (k ? 0.13 : 0.21), 0);
+        var vx = tip.x - tail.x, vy = tip.y - tail.y, len = Math.hypot(vx, vy) || 1;
+        var nx = -vy / len * (k ? 6 : 9), ny = vx / len * (k ? 6 : 9);
+        poly(ctx, [[tip.x, tip.y], [tail.x + nx, tail.y + ny], [tail.x - nx, tail.y - ny]]);
+        ctx.strokeStyle = C.void; ctx.lineWidth = 4; ctx.stroke();
+        ctx.fillStyle = k ? color : C.cream; ctx.fill();
+      }
+      // banner above the disc from the very first beat: direction in words and arrows, so it's known early
+      var word = sgn > 0 ? 'SPIN RIGHT' : 'SPIN LEFT';
+      ctx.font = '22px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      var bw = ctx.measureText(word).width + 120, by = top.y - 34, bscale = 1 + 0.08 * onBeat;
+      ctx.save(); ctx.translate(top.x, by); ctx.scale(bscale, bscale);
+      ctx.fillStyle = 'rgba(8,6,14,.95)'; ctx.fillRect(-bw / 2, -24, bw, 48);
+      ctx.strokeStyle = color; ctx.lineWidth = 4; ctx.strokeRect(-bw / 2 + 2, -22, bw - 4, 44);
+      ctx.fillStyle = C.cream; ctx.fillText(word, sgn > 0 ? -14 : 14, 2);
+      var ax = sgn > 0 ? bw / 2 - 30 : -bw / 2 + 30, shake = 5 * onBeat * sgn;
+      pixelArrow(ctx, ax + shake, 0, sgn, 26, color);
+      ctx.restore();
+      if (!spinning) {   // 3, 2, 1 big in the middle of the disc, popping on each beat
+        var pop = 1 + 0.45 * onBeat;
+        ctx.save(); ctx.translate(cp.x, cp.y); ctx.scale(pop, pop);
+        ctx.font = '72px ' + FONT;
+        ctx.strokeStyle = C.void; ctx.lineWidth = 12; ctx.strokeText(String(n), 0, 4); ctx.fillStyle = C.cream; ctx.fillText(String(n), 0, 4);
+        ctx.restore();
+      } else {   // SPIN beat: arrowheads racing round the rim in the spin direction, plus a big sweep arrow
+        var a0 = sgn > 0 ? -Math.PI * 0.75 : Math.PI * 0.75, a1 = a0 + sgn * Math.PI * 1.3;
+        planeCircle(ctx, L, c.x, c.y, R0 - 20, 0, a0, a1);
+        ctx.strokeStyle = C.void; ctx.lineWidth = 18; ctx.stroke(); ctx.strokeStyle = color; ctx.lineWidth = 10; ctx.stroke();
+        var tip = planePt(L, c.x, c.y, R0 - 20, a1, 0), back = planePt(L, c.x, c.y, R0 - 20, a1 - sgn * 0.3, 0);
+        var dx = tip.x - back.x, dy = tip.y - back.y, dl = Math.hypot(dx, dy) || 1; dx /= dl; dy /= dl;
+        ctx.fillStyle = color; ctx.beginPath(); ctx.moveTo(tip.x + dx * 26, tip.y + dy * 26); ctx.lineTo(tip.x - dy * 18, tip.y + dx * 18); ctx.lineTo(tip.x + dy * 18, tip.y - dx * 18); ctx.closePath(); ctx.fill();
+        ctx.font = '34px ' + FONT;
+        ctx.strokeStyle = C.void; ctx.lineWidth = 10; ctx.strokeText('SPIN!', cp.x, cp.y + 2); ctx.fillStyle = C.cream; ctx.fillText('SPIN!', cp.x, cp.y + 2);
+      }
+    }
+    ctx.restore();
   }
 
   var Deck = {
+    drawJogCue: drawJogCue,
     // retro body through the camera. ctx: retro layer in logical coords. o: {beat, e, fxOn}
     draw: function (ctx, L, o) {
       var fl = flatCanvas(), f = fl.ctx, d = L.flat.deck, cam = L.cam;
@@ -1024,15 +1196,14 @@
     ctx.restore();
   }
   function drawRecordedFaders(ctx, guide) {
-    var faders = [['A VOL', 'a.volume', 16383], ['CROSSFADE', 'mixer.crossfade', 8191],
-      ['B VOL', 'b.volume', 16383], ['MASTER', 'mixer.master', 16383]];
+    var faders = [['A VOL', 'a.volume', 16383], ['B VOL', 'b.volume', 16383], ['MASTER', 'mixer.master', 16383]];
     ctx.save();
-    plate(ctx, 599, 787, 402, 62);
+    plate(ctx, 22, 120, 330, 54);
     ctx.font = '8px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     faders.forEach(function (fader, i) {
-      var x = 618 + i * 95, y = 824, w = 78, key = fader[1];
+      var x = 44 + i * 101, y = 151, w = 78, key = fader[1];
       var target = x + w * clamp((guide.target[key] ?? fader[2]) / 16383, 0, 1);
-      ctx.fillStyle = C.cream; ctx.fillText(fader[0], x + w / 2, 805);
+      ctx.fillStyle = C.cream; ctx.fillText(fader[0], x + w / 2, 136);
       ctx.fillStyle = '#555267'; ctx.fillRect(x, y, w, 3);
       ctx.fillStyle = C.amber; ctx.fillRect(target - 2, y - 6, 4, 14);
       if (Number.isFinite(guide.live?.[key])) {
@@ -1203,15 +1374,50 @@
 
   // ---------------------------------------------------------------- Title backdrop (shared by title + track select)
   // Same stage on both pages so the cut from "turn any knob" to track select is seamless.
-  function TitleBackdrop() { this.t = 0; }
-  TitleBackdrop.prototype.draw = function (stage, dt, tAbs, bpm, e) {
+  function TitleBackdrop() { this.t = 0; this.floorTravel = 0; }
+  TitleBackdrop.prototype.draw = function (stage, dt, tAbs, bpm, e, warp) {
     this.t += dt;
-    var beat = this.t * (bpm || 128) / 60, vo = { t: tAbs, e: e == null ? 0.5 : e, beat: beat, road: true };
-    stage.beginLow(); Venue.draw(stage.low, vo); Venue.drawBeams(stage.low, vo); bloom(stage.low, 446, 0.5); Venue.drawBooth(stage.low, vo); stage.endLow();
+    var tempo = (bpm || 128) / 60, beat = this.t * tempo;
+    this.floorTravel += dt * tempo * (warp || 0) * 7;
+    var vo = { t: tAbs, e: e == null ? 0.5 : e, beat: beat, road: true, floorTravel: this.floorTravel };
+    stage.beginLow();
+    Venue.draw(stage.low, vo); Venue.drawBeams(stage.low, vo); bloom(stage.low, 446, 0.5);
+    Venue.drawBooth(stage.low, vo); stage.endLow();
     var s = stage.sharp; s.setTransform(1, 0, 0, 1, 0, 0); s.clearRect(0, 0, W, H);
     var vg = s.createRadialGradient(800, 400, 120, 800, 400, 760); vg.addColorStop(0, 'rgba(11,8,20,.6)'); vg.addColorStop(1, 'rgba(11,8,20,0)');
     s.fillStyle = vg; s.fillRect(0, 0, W, H);
     return beat;
+  };
+
+  var TitleScreen = {
+    create: function (rootEl, opts) {
+      opts = opts || {};
+      var stage = createStage(rootEl), bd = opts.backdrop || new TitleBackdrop(), clock = 0, started = false;
+      function start() {
+        if (started) return;
+        started = true; if (opts.onStart) opts.onStart();
+      }
+      function onKey(e) {
+        if (e.repeat || e.ctrlKey || e.metaKey || e.altKey || e.key === 'Tab' || e.target.closest?.('button,a,input,select,summary')) return;
+        e.preventDefault(); start();
+      }
+      if (opts.keyboard !== false) window.addEventListener('keydown', onKey);
+      stage.el.addEventListener('click', start);
+      stage.run(function (dt, tAbs) {
+        clock += dt;
+        var beat = bd.draw(stage, dt, tAbs, opts.bpm, 0.5), s = stage.sharp;
+        Title.draw(s, 800, 300, { text: 'MAINSTAGE', sub: '', size: 110, px: 5, maxWidth: 1240, beat: beat, t: clock });
+        s.save(); s.font = '16px ' + FONT; s.textAlign = 'center';
+        s.fillStyle = Math.floor(clock * 1.5) % 2 ? C.cream : hexA(C.cream, 0.35);
+        s.fillText('TURN ANY KNOB TO START', 800, 800);
+        if (clock < 0.5 && opts.fadeIn !== false) { s.fillStyle = hexA(C.void, 1 - clock / 0.5); s.fillRect(0, 0, W, H); }
+        s.restore();
+        if (opts.preview && clock >= 2.6) start();
+      }, { timeline: true });
+      return { el: stage.el, start: start, destroy: function () {
+        stage.stop(); window.removeEventListener('keydown', onKey); stage.el.remove();
+      } };
+    }
   };
 
   // ---------------------------------------------------------------- Vinyl (8-bit spinning record)
@@ -1280,14 +1486,24 @@
     // opts: {tracks, index, onChange(track, i), onConfirm(track, i), keyboard=true}
     create: function (rootEl, opts) {
       opts = opts || {};
-      var tracks = opts.tracks || TRACKS, sel = opts.index || 0, stage = createStage(rootEl), bd = new TitleBackdrop();
+      var tracks = opts.tracks || TRACKS, sel = opts.index || 0, stage = createStage(rootEl), bd = opts.backdrop || new TitleBackdrop();
       var anim = tracks.map(function (_, i) { return { angle: i, grow: i === sel ? 1 : 0 }; });
       var acc = 0, lastPos = {}, confirmT = -9, clock = 0, slots = [400, 800, 1200], discY = 520;
+      var recordPose;
+      var INTRO = opts.intro === false ? 0 : 1.2;
+      function eo(t) { t = clamp(t, 0, 1); return 1 - Math.pow(1 - t, 3); }
+      var confirmed = false, confirmDelay = opts.confirmDelay || 0;
       function select(i) {
+        if (clock < INTRO || (confirmed && confirmDelay)) return;
         i = mod(i, tracks.length); if (i === sel) return;
         sel = i; if (opts.onChange) opts.onChange(tracks[sel], sel);
       }
-      function confirm() { confirmT = clock; if (opts.onConfirm) opts.onConfirm(tracks[sel], sel); }
+      function confirm() {
+        if (clock < INTRO || (confirmed && confirmDelay) || clock - confirmT < 0.8) return;
+        confirmT = clock;
+        confirmed = true;
+        if (!confirmDelay && opts.onConfirm) opts.onConfirm(tracks[sel], sel);
+      }
       function knob(ev) {
         var d = 0, id = ev.channel + ':' + ev.row;
         if (typeof ev.delta === 'number') d = ev.delta;
@@ -1304,6 +1520,7 @@
         else { if (clock - jogRT > 0.5) jogR = 0; jogRT = clock; jogR += Math.abs(d); if (jogR > 0.25 && clock - confirmT > 0.8) { jogR = 0; confirm(); } }
       }
       function onKey(e) {
+        if (e.repeat || e.target.closest?.('button,a,input,select,summary')) return;
         if (e.key === 'ArrowRight') { select(sel + 1); e.preventDefault(); }
         else if (e.key === 'ArrowLeft') { select(sel - 1); e.preventDefault(); }
         else if (e.key === 'Enter' || e.key === ' ') { confirm(); e.preventDefault(); }
@@ -1315,10 +1532,15 @@
       });
       stage.run(function (dt, tAbs) {
         clock += dt;
-        var tr = tracks[sel], beat = bd.draw(stage, dt, tAbs, tr.bpm, 0.55), bp = beat - Math.floor(beat), kick = Math.exp(-bp * 7), s = stage.sharp;
-        Title.draw(s, 800, 118, { text: 'MAINSTAGE', sub: '', size: 84, px: 5, maxWidth: 980, beat: beat, t: clock });
+        if (opts.preview && clock >= 1.9 && clock - dt < 1.9) select(sel - 1);
+        if (opts.preview && clock >= 3 && confirmT < 0) confirm();
+        var warp = INTRO ? Math.pow(Math.max(0, 1 - clock / INTRO), 2) : 0;
+        var tr = tracks[sel], beat = bd.draw(stage, dt, tAbs, tr.bpm, 0.55, warp), bp = beat - Math.floor(beat), kick = Math.exp(-bp * 7), s = stage.sharp;
+        var pl = INTRO ? eo(clock / 0.7) : 1;   // logo glides up from its title-screen spot
+        Title.draw(s, 800, lerp(300, 118, pl), { text: 'MAINSTAGE', sub: '', size: lerp(110, 84, pl), px: 5, maxWidth: lerp(1240, 980, pl), beat: beat, t: clock });
         // plate: CHOOSE YOUR TRACK
-        s.save(); s.font = '28px ' + FONT; s.textAlign = 'center'; s.textBaseline = 'middle';
+        var pb = INTRO ? eo((clock - 0.35) / 0.4) : 1;   // banner drops in
+        s.save(); s.globalAlpha = pb; s.translate(0, (1 - pb) * -300); s.font = '28px ' + FONT; s.textAlign = 'center'; s.textBaseline = 'middle';
         var pw = s.measureText('CHOOSE YOUR TRACK').width + 72;
         s.fillStyle = 'rgba(11,8,20,.85)'; s.fillRect(800 - pw / 2, 236, pw, 60);
         s.strokeStyle = C.cyan; s.lineWidth = 3; s.strokeRect(800 - pw / 2 + 1.5, 237.5, pw - 3, 57);
@@ -1326,34 +1548,47 @@
         tracks.forEach(function (t, i) {
           var a = anim[i], on = i === sel;
           a.grow += ((on ? 1 : 0) - a.grow) * Math.min(1, dt * 8);
-          a.angle += dt * (on ? t.bpm / 60 * Math.PI * 0.5 : 0.35);           // selected spins on its tempo
-          var size = 230 + 90 * a.grow + (on ? 10 * kick : 0), y = discY - 18 * a.grow + (on ? -4 * kick : 0);
+          var pr = INTRO ? eo((clock - 0.5 - i * 0.12) / 0.5) : 1;            // records fly up into place, staggered
+          a.angle += dt * (on ? t.bpm / 60 * Math.PI * 0.5 : 0.35) + dt * 14 * (1 - pr);   // selected spins on its tempo
+          var size = (230 + 90 * a.grow + (on ? 10 * kick : 0)) * lerp(1.45, 1, pr);
+          var y = discY - 18 * a.grow + (on ? -4 * kick : 0) + (1 - pr) * 620;
           var pop = on ? Math.max(0, 1 - (clock - confirmT) / 0.5) : 0;
+          if (on) recordPose = { x: slots[i], y: y, angle: a.angle, size: size * (1 + 0.15 * pop) };
+          var floorY = discY + 185;
+          s.save();
+          s.fillStyle = hexA(C.void, (on ? 0.72 : 0.46) * pr);
+          s.beginPath(); s.ellipse(slots[i], floorY, size * 0.44, size * 0.052, 0, 0, Math.PI * 2); s.fill(); s.restore();
           if (on) {   // spotlight ring on the floor under the selected record
             s.save(); s.globalCompositeOperation = 'lighter';
-            var g = s.createRadialGradient(slots[i], y + size * 0.48, 10, slots[i], y + size * 0.48, size * 0.75);
+            var g = s.createRadialGradient(slots[i], floorY, 10, slots[i], floorY, size * 0.75);
             g.addColorStop(0, hexA(t.color, 0.45 + 0.25 * kick)); g.addColorStop(1, hexA(t.color, 0));
-            s.fillStyle = g; s.beginPath(); s.ellipse(slots[i], y + size * 0.48, size * 0.75, size * 0.2, 0, 0, Math.PI * 2); s.fill(); s.restore();
+            s.globalAlpha = pr;
+            s.fillStyle = g; s.beginPath(); s.ellipse(slots[i], floorY, size * 0.75, size * 0.17, 0, 0, Math.PI * 2); s.fill(); s.restore();
           }
           s.save(); s.globalAlpha = on ? 1 : 0.88;
           Vinyl.draw(s, slots[i], y, { color: t.color, icon: t.icon, angle: a.angle, size: size * (1 + 0.15 * pop), glow: a.grow * (0.6 + 0.4 * kick) + pop });
           s.restore();
           // name in the title's chrome, smaller
-          Title.draw(s, slots[i], y + size / 2 + 56, { text: t.name, sub: '', size: on ? 46 : 36, px: on ? 4 : 3, beat: on ? beat : 0, t: clock });
+          Title.draw(s, slots[i], y + size / 2 + 56, { text: t.name, sub: '', size: on ? 46 : 36, maxWidth: 380, px: on ? 4 : 3, beat: on ? beat : 0, t: clock });
           if (on) {
             var off = size / 2 + 34 + 6 * Math.sin(clock * 6);
             drawPixelArrow(s, slots[i] - off, y, -1, 30, t.color); drawPixelArrow(s, slots[i] + off, y, 1, 30, t.color);
           }
         });
-        s.save(); s.font = '14px ' + FONT; s.textAlign = 'center';
+        s.save(); s.font = '14px ' + FONT; s.textAlign = 'center'; s.globalAlpha = INTRO ? clamp((clock - INTRO) / 0.3, 0, 1) : 1;
         s.fillStyle = Math.floor(clock * 1.5) % 2 ? C.cream : hexA(C.cream, 0.4);
         s.fillText('SPIN LEFT JOGWHEEL TO CHOOSE    SPIN RIGHT JOGWHEEL TO SELECT', 800, 866); s.restore();
+        if (INTRO && clock < 0.3) { s.fillStyle = hexA(C.cream, 0.8 * (1 - clock / 0.3)); s.fillRect(0, 0, W, H); }   // entry flash
+        if (confirmed && confirmDelay && clock - confirmT >= confirmDelay) {
+          confirmed = false;
+          if (opts.onConfirm) opts.onConfirm(tracks[sel], sel, recordPose);
+        }
         if (clock - confirmT < 0.6) {   // confirm flash
           var cf = 1 - (clock - confirmT) / 0.6;
           s.save(); s.fillStyle = hexA(tracks[sel].color, 0.25 * cf); s.fillRect(0, 0, W, H);
           Title.draw(s, 800, 360, { text: "LET'S MIX", sub: '', size: 72, px: 5, beat: beat, t: clock }); s.restore();
         }
-      });
+      }, { timeline: true });
       return {
         el: stage.el, knob: knob, jog: jog, select: select, confirm: confirm,
         next: function () { select(sel + 1); }, prev: function () { select(sel - 1); },
@@ -1377,6 +1612,94 @@
   //   screen.knob({channel, row, position})  absolute 0..1 (0 = full CCW, 0.5 = 12 o'clock)
   //   screen.knob({channel, row, delta})     relative turn, in fractions of the full sweep (+ = CW)
   //   screen.showJudgment({channel, row, judgment: 'perfect'|'good'|'miss', reason?})
+  // ---------------------------------------------------------------- PixelWipe (transition overlay)
+  // Chunky blocks sweep diagonally across an element with a neon leading edge.
+  // mode 'cover': blocks fill in until the element is hidden. mode 'reveal': blocks clear away.
+  var PixelWipe = {
+    run: function (el, o) {
+      o = o || {};
+      if (getComputedStyle(el).position === 'static') el.style.position = 'relative';
+      var cv = document.createElement('canvas'); cv.width = 64; cv.height = 36;
+      cv.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;image-rendering:pixelated;pointer-events:none;z-index:20;';
+      el.appendChild(cv);
+      var x = cv.getContext('2d'), cols = 64, rows = 36, r = rng(o.seed || 9), keys = [], i, j;
+      for (j = 0; j < rows; j++) for (i = 0; i < cols; i++) keys.push(((i / cols) * 0.7 + (j / rows) * 0.3) * 0.8 + r() * 0.2);
+      var dur = o.duration || 0.6, t0 = performance.now(), cover = o.mode !== 'reveal', edge = [C.magenta, C.cyan, C.violet, o.color || C.cream];
+      var frameId;
+      (function tick() {
+        var p = clamp((performance.now() - t0) / 1000 / dur, 0, 1);
+        x.clearRect(0, 0, cols, rows);
+        for (j = 0; j < rows; j++) for (i = 0; i < cols; i++) {
+          var k = keys[j * cols + i], on = cover ? p >= k : p < k;
+          if (!on) continue;
+          var near = Math.abs(p - k) < 0.05;
+          x.fillStyle = near ? edge[(i + j) % 4] : C.void; x.fillRect(i, j, 1, 1);
+        }
+        if (p < 1) frameId = requestAnimationFrame(tick);
+        else { if (!cover || o.keep === false) cv.remove(); if (o.onDone) o.onDone(cv); }
+      })();
+      return { el: cv, remove: function () { cancelAnimationFrame(frameId); cv.remove(); } };
+    }
+  };
+
+  // ---------------------------------------------------------------- Loading page (track select -> game)
+  // The chosen record spins big over the same backdrop (darker), a pixel progress bar fills, then a
+  // 3-2-1 countdown lands on the track's beat, LET'S MIX, and a pixel wipe covers the screen.
+  var LoadingScreen = {
+    create: function (rootEl, opts) {
+      opts = opts || {};
+      var track = opts.track || TRACKS[0], stage = createStage(rootEl), bd = opts.backdrop || new TitleBackdrop(), clock = 0;
+      var origin = opts.recordPose || { x: 800, y: 500, angle: 0, size: 330 }, angle = origin.angle;
+      var reduced = opts.reducedMotion, targetProgress = 0, progress = 0, countBeat0 = null, wipe, finished = false;
+      stage.run(function (dt, tAbs) {
+        clock += dt;
+        var sceneBeat = bd.draw(stage, reduced ? 0 : dt, reduced ? 0 : tAbs, track.bpm, 0.35);
+        var beat = reduced ? clock * track.bpm / 60 : sceneBeat;
+        var bp = beat - Math.floor(beat), kick = reduced ? 0 : Math.exp(-bp * 7), s = stage.sharp;
+        s.fillStyle = hexA(C.void, 0.17 + 0.42 * clamp(clock / 0.8, 0, 1)); s.fillRect(0, 0, W, H);
+        progress = Math.min(targetProgress, progress + dt / 0.6);
+        if (progress >= 1 && countBeat0 === null) countBeat0 = Math.ceil(beat);
+        // header: track name in chrome
+        Title.draw(s, 800, 120, { text: track.name, sub: '', size: 96, maxWidth: 1280, px: 6, beat: beat, t: clock });
+        // the record, entering from where it sat on track select, spinning up
+        var enter = reduced ? 1 : clamp(clock / 0.8, 0, 1), ee = 1 - Math.pow(1 - enter, 3);
+        if (!reduced) angle += dt * (track.bpm / 60) * Math.PI * (0.5 + 1.5 * ee);
+        var size = lerp(origin.size, 430 + 14 * kick, ee);
+        Vinyl.draw(s, lerp(origin.x, 800, ee), lerp(origin.y, 430, ee), { color: track.color, icon: track.icon, angle: angle, size: size, glow: 0.7 + 0.3 * kick });
+        // progress bar or countdown
+        if (countBeat0 === null || beat < countBeat0) {
+          var segs = 24, bw = 22, gap = 6, x0 = 800 - (segs * (bw + gap) - gap) / 2, lit = Math.floor(progress * segs);
+          s.save(); s.fillStyle = 'rgba(11,8,20,.85)'; s.fillRect(x0 - 14, 690, segs * (bw + gap) - gap + 28, 44);
+          s.strokeStyle = track.color; s.lineWidth = 3; s.strokeRect(x0 - 12.5, 691.5, segs * (bw + gap) - gap + 25, 41);
+          for (var k = 0; k < segs; k++) { s.fillStyle = k < lit ? track.color : 'rgba(246,236,214,.1)'; s.fillRect(x0 + k * (bw + gap), 702, bw, 20); }
+          s.font = '16px ' + FONT; s.textAlign = 'center'; s.fillStyle = C.cream;
+          s.fillText('LOADING' + '...'.slice(0, 1 + Math.floor(clock * 3) % 3), 800, 672);
+          s.restore();
+        } else {
+          var n = Math.floor(beat) - countBeat0;   // -1 waiting, 0..2 => 3,2,1, 3 => LET'S MIX
+          if (n >= 0 && n < 3) {
+            var pop = reduced ? 1 : 1 + 0.35 * Math.exp(-bp * 8);
+            s.save(); s.translate(800, 430); s.scale(pop, pop);
+            Title.draw(s, 0, 0, { text: String(3 - n), sub: '', size: 220, px: 10, beat: 0, t: clock }); s.restore();
+          } else if (n >= 3) {
+            Title.draw(s, 800, 430, { text: "LET'S MIX!", sub: '', size: 110, px: 6, beat: beat, t: clock });
+            if (!finished && n >= 4) {
+              finished = true;
+              if (reduced) opts.onDone?.(track);
+              else wipe = PixelWipe.run(stage.el, { mode: 'cover', duration: 0.72, color: track.color, onDone: function () { opts.onDone?.(track); } });
+            }
+          }
+        }
+        if (!reduced && clock < 0.35) { s.fillStyle = hexA(track.color, 0.5 * (1 - clock / 0.35)); s.fillRect(0, 0, W, H); }   // carries the select flash
+      }, { timeline: true });
+      return {
+        el: stage.el,
+        setProgress: function (p) { targetProgress = clamp(p, 0, 1); },
+        destroy: function () { if (wipe) wipe.remove(); stage.stop(); stage.el.remove(); }
+      };
+    }
+  };
+
   function createScreen(rootEl, opts) {
     opts = opts || {};
     var stage = createStage(rootEl);
@@ -1385,7 +1708,7 @@
     var show = Object.assign({ venue: true, crowd: true, hud: true, deck: true }, opts.show || {});
     var crowd = new Crowd(7, null, Boolean(opts.getCrowdHype)), fx = new HitFX(), eq = new Equalizer(16);
     var crowdEnergy = null, confetti = null;
-    var reducedMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var reducedMotion = opts.reducedMotion ?? (typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches);
     var webcam = null, webcamMirror = opts.webcamMirror !== false;
     function setWebcam(src) {
       if (!src) { webcam = null; return; }
@@ -1398,6 +1721,29 @@
     var knobs = {}, turnListeners = [];
     var smoothing = opts.knobSmoothing == null ? 0.035 : opts.knobSmoothing; // seconds; subtle
     var clock = 0, energy = 0, lastCombo = 0, frameState = null;
+    var xf = { pos: null, target: null, cue: null };
+    var faderInput, cueStatus;
+    if (show.deck) {
+      cueStatus = document.createElement('span');
+      cueStatus.className = 'flx-cue-status'; cueStatus.setAttribute('role', 'status');
+      stage.el.appendChild(cueStatus);
+      if (opts.onCrossfadeInput) {
+        var left = xfPt(L, 0, -35, 12), right = xfPt(L, 1, 35, 12);
+        faderInput = document.createElement('input');
+        faderInput.type = 'range'; faderInput.min = 0; faderInput.max = 16383; faderInput.step = 1;
+        faderInput.className = 'flx-crossfader'; faderInput.setAttribute('aria-label', 'Crossfader');
+        faderInput.style.left = left.x / W * 100 + '%'; faderInput.style.width = (right.x - left.x) / W * 100 + '%';
+        faderInput.style.top = left.y / H * 100 + '%'; faderInput.style.height = (right.y - left.y) / H * 100 + '%';
+        faderInput.addEventListener('input', function () { opts.onCrossfadeInput(faderInput.valueAsNumber); });
+        faderInput.addEventListener('keydown', function (ev) {
+          var direction = { ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1 }[ev.key];
+          if (!direction) return;
+          ev.preventDefault();
+          opts.onCrossfadeInput(clamp(faderInput.valueAsNumber + direction * 819, 0, 16383));
+        });
+        stage.el.appendChild(faderInput);
+      }
+    }
     var scoreAward = null;
     function showScoreAward(award) {
       scoreAward = { points: award.points, multiplier: award.multiplier, at: clock };
@@ -1473,7 +1819,19 @@
       if (show.hud && confetti) drawHypeConfetti(s, confetti.pieces, celebration, true);
       NoteLanes.draw(s, L, { time: f.time, approach: approach, spb: spb, traces: f.traces });
       NoteLanes.drawGuides(s, L, upcoming, f.traces);
-      if (show.deck) Deck.drawOverlay(s, L, knobs);
+      if (show.deck) {
+        Deck.drawOverlay(s, L, knobs);
+        var faderTarget = clamp((f.crossfade ?? 8191.5) / 16383, 0, 1);
+        if (faderInput) {
+          if (faderInput.valueAsNumber !== Math.round(faderTarget * 16383)) faderInput.value = Math.round(faderTarget * 16383);
+          faderInput.disabled = f.mode === 'demo';
+        }
+        if (xf.target !== null && xf.target !== faderTarget && !reducedMotion) xf.moveT = clock;
+        xf.target = faderTarget;
+        xf.pos = xf.pos === null || reducedMotion ? xf.target : lerp(xf.pos, xf.target, 1 - Math.exp(-dt / 0.045));
+        xf.cue = f.crossfadeCue;
+        drawCrossfader(s, L, xf, clock, vo.beat, energy);
+      }
       (f.notes || []).forEach(function (n) {
         if (L.rows.indexOf(n.row) < 0 || n.state === 'hit') return;
         var d = n.time - f.time; if (d > approach) return;
@@ -1483,21 +1841,15 @@
         var trace = f.traces && f.traces[key(n.channel, n.row)];
         Note.draw(s, lane.x + traceOffset(trace, d / approach, L.laneWidth, lane), noteY(L, lane, d, approach, trace), n.dir, { r: L.noteR, tail: n.state === 'pending', alpha: alpha });
       });
-      function drawJogCue(channel, label, color) {
-        var jog = L.P(510 + L.flat.deckOffset[channel], 612);
-        s.save(); s.textAlign = 'center'; s.textBaseline = 'middle';
-        s.font = (label.length > 3 ? '15px ' : '36px ') + FONT;
-        s.lineWidth = 6; s.strokeStyle = C.void; s.strokeText(label, jog.x, jog.y);
-        s.fillStyle = color; s.fillText(label, jog.x, jog.y); s.restore();
+      if (show.deck) {
+        var wheelLabels = (f.jogCues || []).map(function (cue) {
+          Deck.drawJogCue(s, L, cue, spb, reducedMotion, clock);
+          var wheel = cue.deck === 'a' ? 'Spin left' : 'Spin right';
+          if (cue.bonus || cue.matched) return cue.bonus ? '+' + cue.bonus : 'On cue';
+          return cue.remaining > 0 ? wheel + ' in ' + Math.ceil(cue.remaining) : wheel + ' now';
+        }).join('. ');
+        if (cueStatus.textContent !== wheelLabels) cueStatus.textContent = wheelLabels;
       }
-      if (f.entryCue) drawJogCue(2, f.entryCue, C.cream);
-      (f.jogCues || []).forEach(function (cue) {
-        var side = cue.deck === 'a' ? 'LEFT' : 'RIGHT';
-        var label = cue.bonus ? '+' + cue.bonus : cue.matched ? 'ON CUE'
-          : 'SPIN ' + side + (cue.remaining > 0 ? ' · ' + Math.ceil(cue.remaining) : '');
-        var color = cue.bonus || cue.matched ? C.laser : C.cream;
-        drawJogCue(cue.deck === 'a' ? 1 : 2, label, color);
-      });
       fx.draw(s);
       if (scoreAward && clock - scoreAward.at >= 1) scoreAward = null;
       if (show.hud) HUD.draw(s, { score: f.score, award: scoreAward, clock: clock, reducedMotion: reducedMotion });
@@ -1670,6 +2022,7 @@
     ROWS: ROWS, COLORS: C, FONT: FONT, WINDOWS: WINDOWS, SAMPLE_CHART: SAMPLE_CHART,
     makeLayout: makeLayout, createStage: createStage, createScreen: createScreen, createSampleSource: createSampleSource,
     Venue: Venue, Crowd: Crowd, Deck: Deck, Equalizer: Equalizer, sampleAudio: sampleAudio, Title: Title, bloom: bloom, TitleBackdrop: TitleBackdrop, Vinyl: Vinyl, TrackSelect: TrackSelect, TRACKS: TRACKS, Note: Note, HitMarker: HitMarker, HitFX: HitFX, NoteLanes: NoteLanes, HUD: HUD,
+    TitleScreen: TitleScreen, PixelWipe: PixelWipe, LoadingScreen: LoadingScreen,
     GameplayScreen: { create: function (el, o) { return createScreen(el, o); } }
   };
 })(typeof window !== 'undefined' ? window : this);

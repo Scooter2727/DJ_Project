@@ -11,17 +11,25 @@ body {
 
 .mainstage-shell {
   position: relative;
-  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  min-height: 280px;
   background: #0b0814;
   color: #f6ecd6;
 }
 
 .mainstage-stage {
-  width: min(100%, 1600px);
-  margin: 0 auto;
+  display: grid;
+  place-items: center;
+  flex: 1;
+  min-height: 0;
+  container-type: size;
+  background: radial-gradient(ellipse at center, #251334, #08060e 76%);
 }
 
 .mainstage-stage .flx-stage {
+  max-width: min(100%, 1600px, calc(100cqh * 16 / 9));
   min-height: 0;
 }
 
@@ -42,6 +50,9 @@ body {
 }
 
 .mainstage-controls {
+  box-sizing: border-box;
+  flex: none;
+  flex-wrap: wrap;
   position: relative;
   z-index: 20;
   display: flex;
@@ -49,8 +60,8 @@ body {
   gap: 8px;
   width: 100%;
   padding: 10px 16px;
-  border-bottom: 1px solid #3a2160;
-  background: #1a1028;
+  border-bottom: 1px solid #634775;
+  background: linear-gradient(#23172f, #130e20);
 }
 
 .mainstage-button,
@@ -66,6 +77,13 @@ body {
 
 .mainstage-button {
   cursor: pointer;
+  text-decoration: none;
+}
+
+.mainstage-preview-link {
+  border-color: #a879de;
+  color: #eadbff;
+  background: #30203f;
 }
 
 .mainstage-button:hover,
@@ -77,7 +95,7 @@ body {
 .mainstage-dev-settings {
   position: relative;
   z-index: 30;
-  padding: 7px 12px;
+  padding: 0;
 }
 
 .mainstage-dev-settings summary {
@@ -87,7 +105,7 @@ body {
 .mainstage-dev-panel {
   position: absolute;
   top: 100%;
-  left: 12px;
+  left: 0;
   box-sizing: border-box;
   width: max-content;
   max-width: min(680px, calc(100vw - 24px));

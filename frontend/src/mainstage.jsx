@@ -15,6 +15,8 @@ const SAVED_MIXES_KEY = "mainstage-saved-mixes";
 const GUIDE_FORMAT = "mainstage-mix1";
 const DEFAULT_LEVELS_OFFSET_MS = -525;
 const MAINSTAGE_BPM = 126;
+const displayOptions = new URLSearchParams(window.location.search);
+const transitionPreview = displayOptions.get("preview") === "transitions";
 
 function readSavedMixes() {
   try {
@@ -48,7 +50,14 @@ function MainstageApp() {
   const playbackButtonState = useRef(false);
   const valuesRef = useRef({});
   const modeRef = useRef("title");
+  const menuBackdropRef = useRef(null);
+  const returnWipeRef = useRef(null);
+  const revealMenuRef = useRef(null);
+  const recordPoseRef = useRef(null);
+  const revealGameRef = useRef(false);
   const [mode, setMode] = useState("title");
+  const [fullMotion, setFullMotion] = useState(() => transitionPreview || displayOptions.get("motion") === "full"
+    || !window.matchMedia("(prefers-reduced-motion: reduce)").matches);
   const [access, setAccess] = useState(null);
   const [ports, setPorts] = useState([]);
   const [selectedPort, setSelectedPort] = useState("");
@@ -121,6 +130,10 @@ function MainstageApp() {
 
   useEffect(() => {
     modeRef.current = mode;
+    return () => {
+      returnWipeRef.current?.remove();
+      returnWipeRef.current = null;
+    };
   }, [mode]);
 
   useEffect(() => {
@@ -137,60 +150,57 @@ function MainstageApp() {
     mountRef.current.innerHTML = "";
 
     if (mode === "title") {
-      const stage = api.createStage(mountRef.current);
-      const backdrop = new api.TitleBackdrop();
-      let clock = 0;
-      const startSelect = () => setMode("select");
-      stage.el.addEventListener("click", startSelect);
-      const onKey = event => {
-        event.preventDefault();
-        startSelect();
-      };
-      window.addEventListener("keydown", onKey, { once: true });
-      stage.run((dt, absolute) => {
-        clock += dt;
-        const beat = backdrop.draw(stage, dt, absolute, MAINSTAGE_BPM, 0.5);
-        api.Title.draw(stage.sharp, 800, 300, {
-          text: "MAINSTAGE",
-          sub: "",
-          size: 110,
-          px: 5,
-          maxWidth: 1240,
-          beat,
-          t: clock,
-        });
-        const ctx = stage.sharp;
-        ctx.font = "16px " + api.FONT;
-        ctx.textAlign = "center";
-        ctx.fillStyle = Math.floor(clock * 1.5) % 2 ? "#f6ecd6" : "rgba(246,236,214,.35)";
-        ctx.fillText("TURN ANY KNOB TO START", 800, 800);
+      const returning = revealMenuRef.current === "title";
+      revealMenuRef.current = null;
+      menuBackdropRef.current = new api.TitleBackdrop();
+      const title = api.TitleScreen.create(mountRef.current, {
+        backdrop: menuBackdropRef.current, bpm: MAINSTAGE_BPM, preview: transitionPreview,
+        fadeIn: !returning && fullMotion,
+        keyboard: !transitionPreview, onStart: () => setMode("select"),
       });
-      pageRef.current = {
-        destroy() {
-          stage.stop();
-          stage.el.removeEventListener("click", startSelect);
-          window.removeEventListener("keydown", onKey);
-          stage.el.remove();
-        },
-      };
-      return () => pageRef.current?.destroy();
+      pageRef.current = title;
+      const reveal = returning ? api.PixelWipe.run(title.el, { mode: "reveal", duration: 0.6 }) : null;
+      return () => { reveal?.remove(); title.destroy(); };
     }
 
     if (mode === "select") {
-      pageRef.current = api.TrackSelect.create(mountRef.current, {
+      const returning = revealMenuRef.current === "select";
+      revealMenuRef.current = null;
+      const select = api.TrackSelect.create(mountRef.current, {
         tracks: TRACKS,
-        index: 0,
-        keyboard: true,
-        onConfirm: track => {
+        index: returning ? TRACKS.indexOf(selectedTrack) : transitionPreview ? 1 : 0,
+        backdrop: menuBackdropRef.current, preview: transitionPreview, keyboard: !transitionPreview,
+        intro: fullMotion && !returning,
+        confirmDelay: fullMotion ? 0.5 : 0,
+        onConfirm: (track, index, recordPose) => {
+          if (returnWipeRef.current) return;
+          recordPoseRef.current = recordPose;
           if (track.id !== selectedTrack.id) {
             audioRef.current?.stop();
             hypeRef.current = createMainstageHype();
           }
           setSelectedTrack(track);
+          setMode("loading");
+        },
+      });
+      pageRef.current = select;
+      if (!transitionPreview) select.el.focus({ preventScroll: true });
+      const reveal = returning && fullMotion ? api.PixelWipe.run(select.el, { mode: "reveal", duration: 0.45 }) : null;
+      return () => { reveal?.remove(); select.destroy(); };
+    }
+
+    if (mode === "loading") {
+      const loading = api.LoadingScreen.create(mountRef.current, {
+        track: selectedTrack,
+        recordPose: recordPoseRef.current, backdrop: menuBackdropRef.current, reducedMotion: !fullMotion,
+        onDone: () => {
+          if (returnWipeRef.current) return;
+          revealGameRef.current = fullMotion;
           setMode("game");
         },
       });
-      return () => pageRef.current?.destroy();
+      pageRef.current = loading;
+      return () => loading.destroy();
     }
 
     if (!mix) return;
@@ -216,7 +226,12 @@ function MainstageApp() {
     const screen = api.createScreen(mountRef.current, {
       rows: ROWS,
       source: session.source,
+      onCrossfadeInput: value => {
+        valuesRef.current = { ...valuesRef.current, "mixer.crossfade": value };
+        session.update(valuesRef.current);
+      },
       knobSmoothing: 0,
+      reducedMotion: !fullMotion,
       show: { venue: true, crowd: true, deck: true, hud: true, webcam: true },
       drawWebcamEffects: webcamFiltersRef.current.draw,
       getCrowdHype: dt => {
@@ -237,12 +252,23 @@ function MainstageApp() {
     session.attach(screen);
     sessionRef.current = session;
     pageRef.current = screen;
+    const reveal = revealGameRef.current
+      ? api.PixelWipe.run(screen.el, { mode: "reveal", duration: 0.72, color: selectedTrack.color })
+      : null;
+    revealGameRef.current = false;
+    const replayTimer = transitionPreview ? window.setTimeout(() => returnToMenu("title"), 6000) : null;
     return () => {
+      window.clearTimeout(replayTimer);
+      reveal?.remove();
       sessionRef.current = null;
       session.destroy();
       screen.destroy();
     };
-  }, [mode, selectedTrack, gameMix, previewDeck, readPlayback, loadedMix]);
+  }, [mode, selectedTrack, gameMix, previewDeck, readPlayback, loadedMix, fullMotion]);
+
+  useEffect(() => {
+    if (mode === "loading" && mix) pageRef.current?.setProgress(1);
+  }, [mode, mix]);
 
   useEffect(() => {
     screenRef.current?.setWebcam(cameraOn ? cameraVideoRef.current : null);
@@ -367,11 +393,22 @@ function MainstageApp() {
     else setCameraOn(current => !current);
   }
 
-  function openMainMenu() {
-    setCameraOn(false);
-    audioRef.current?.stop();
-    hypeRef.current = createMainstageHype();
-    setMode("title");
+  function returnToMenu(next) {
+    if (returnWipeRef.current) return;
+    if (next === "title") {
+      setCameraOn(false);
+      hypeRef.current = createMainstageHype();
+    }
+    sessionRef.current?.stop();
+    const page = pageRef.current;
+    if (!page?.el || !fullMotion) {
+      setMode(next);
+      return;
+    }
+    returnWipeRef.current = F().PixelWipe.run(page.el, {
+      mode: "cover", duration: 0.4, color: selectedTrack.color,
+      onDone: () => { revealMenuRef.current = next; setMode(next); },
+    });
   }
 
   function saveMix(event) {
@@ -437,6 +474,10 @@ function MainstageApp() {
   return <main className="mainstage-shell">
     <video className="mainstage-camera-source" ref={cameraVideoRef} muted playsInline aria-hidden="true" />
     {mode === "game" && <div className="mainstage-hype-accessible" ref={hypeMeterRef} role="meter" aria-label="Crowd hype" aria-valuemin={0} aria-valuemax={100} aria-valuenow={STARTING_HYPE} />}
+    {transitionPreview ? <nav className="mainstage-controls" aria-label="Transition preview">
+      <a className="mainstage-button" href="?motion=full">Play MAINSTAGE</a>
+      <span className="mainstage-status" role="status">{({ title: "Title", select: "Track select", loading: "Loading", game: "Deck" })[mode]}</span>
+    </nav> : <div className="mainstage-controls" aria-label="MAINSTAGE controls">
     {mode === "game" && mix && <details className="mainstage-dev-settings">
       <summary className="mainstage-button">Dev Settings</summary>
       <div className="mainstage-dev-panel" role="group" aria-label="Developer tools">
@@ -488,12 +529,13 @@ function MainstageApp() {
         </div>}
       </div>
     </details>}
-    <div className="mainstage-stage" ref={mountRef} />
-    <div className="mainstage-controls" aria-label="MAINSTAGE controls">
-      <button className="mainstage-button" disabled={isRecording} onClick={mode === "title" ? () => setMode("select") : openMainMenu}>
+
+      <button className="mainstage-button" disabled={isRecording} onClick={mode === "title" ? () => setMode("select") : () => returnToMenu("title")}>
         {mode === "title" ? "Start" : "Main menu"}
       </button>
-      {mode === "game" && <button className="mainstage-button" disabled={isRecording} onClick={() => setMode("select")}>Tracks</button>}
+      <a className="mainstage-button mainstage-preview-link" href="?preview=transitions" target="_blank" rel="noopener">Watch transitions</a>
+      {!fullMotion && mode === "title" && <button className="mainstage-button" onClick={() => setFullMotion(true)}>Enable full motion</button>}
+      {mode === "game" && <button className="mainstage-button" disabled={isRecording} onClick={() => returnToMenu("select")}>Tracks</button>}
       {mode === "game" && <button className="mainstage-button" disabled={!mix} onClick={() => sessionRef.current?.togglePlayback()}>
         {transport === "armed" ? (isRecording ? "Play Deck A" : "Start practice") : previewPlaying ? "Pause track" : "Play track"}
       </button>}
@@ -505,7 +547,8 @@ function MainstageApp() {
       <span className={connected ? "mainstage-status online" : "mainstage-status"}>{message || (access && !port ? "No MIDI input found. Check the USB data cable." : access && !connected ? "Opening MIDI input…" : connected && !receivingMidi ? "MIDI input open. Move a knob to test." : null) || (cameraOn && camera.status === "error" && camera.message) || (mode === "game" && transport === "finished" ? "Mix complete" :
         mode === "game" && transport === "ready" && connected ? (selectedTrack.id === "levels" ? "Spin right clockwise to start Levels" : "Spin left counterclockwise to start Heroes") :
         connected ? "DDJ connected" : selectedTrack.name)}</span>
-    </div>
+    </div>}
+    <div className="mainstage-stage" ref={mountRef} />
     {canRecord && draftMix && <dialog ref={saveDialogRef} className="mainstage-save-dialog" aria-labelledby="save-mix-title"
         onCancel={event => event.preventDefault()}>
         <h2 id="save-mix-title">Name and save your mix</h2>

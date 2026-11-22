@@ -91,7 +91,8 @@ export function createMixSession(chart, selection, bpm, {
       if (at - time > JOG_LEAD_SECONDS) return [];
       const bonus = deck === "b" ? rightBonuses.get(rightCueKey(at)) ?? 0 : 0;
       if (at === undefined || (deck === "b" && !bonus && at - time < -JOG_GOOD_SECONDS)) return [];
-      return [{ deck, at, remaining: at - time, matched: deck === "a" && acknowledgedLeft === at, bonus }];
+      return [{ deck, at, remaining: at - time, lead: JOG_LEAD_SECONDS,
+        matched: deck === "a" && acknowledgedLeft === at, bonus }];
     });
   }
 
@@ -124,12 +125,17 @@ export function createMixSession(chart, selection, bpm, {
     const remaining = rightCueTime - time;
     const entryCue = mode === "demo" && !replaying && selection === "mix1" && remaining <= 3 && remaining > -1.2
       ? remaining > 0 ? String(Math.ceil(remaining)) : "DECK B IN" : null;
-    const showJogBonus = mode === "live" && selection === "mix1" && !capture;
+    const showMixCues = selection === "mix1" && !capture;
+    const waitingForSpin = mode === "ready" || mode === "finished" || armedFor === "practice";
+    const referenceFader = chart.valuesAt(time)["mixer.crossfade"] ?? crossfade;
     const playing = active && !!player && !player.paused && !player.ended && !player.seeking && player.readyState >= 2;
     return { time, playing,
-      demo: mode === "demo", guided: guided || armedFor === "practice", entryCue, wheels, crossfade,
-      jogCues: armedFor === "practice" ? jogCuesAt(0, true).filter(cue => cue.deck === master)
-        : active && (replaying || showJogBonus) ? jogCuesAt(time, replaying) : [],
+      demo: mode === "demo", guided: guided || armedFor === "practice", entryCue, wheels,
+      crossfade: mode === "demo" ? referenceFader : liveValues()["mixer.crossfade"]
+        ?? (capture ? crossfade : active ? referenceFader : initialValues["mixer.crossfade"]),
+      crossfadeCue: active && showMixCues ? chart.crossfadeCueAt(time) : null,
+      jogCues: waitingForSpin ? [{ deck: master, at: 0, remaining: 0, lead: JOG_LEAD_SECONDS, matched: false, bonus: 0 }]
+        : active && (replaying || showMixCues) ? jogCuesAt(time, replaying) : [],
       mixerGuide: ((mode === "demo" || guided) && recordedLevels)
         ? { target: chart.valuesAt(time), live: guided ? liveValues() : null } : null };
   }
